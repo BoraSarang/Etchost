@@ -6,7 +6,7 @@ struct MenuBarPopover: View {
     @EnvironmentObject var model: AppModel
     @State private var tableRows: [HostsTableRow] = []
     @State private var isLive = true
-    private let buildTag = "v0.5.0"
+    private let buildTag = "v0.6.0"
 
     var body: some View {
         VStack(spacing: 8) {
@@ -201,7 +201,7 @@ struct MenuBarPopover: View {
         let line = "\(Date().ISO8601Format()) [\(buildTag)] rows=[\(rows)] applying=\(model.isApplying)\n"
         guard let data = line.data(using: .utf8) else { return }
         if fm.fileExists(atPath: url.path), let handle = try? FileHandle(forWritingTo: url) {
-            try? handle.seekToEnd()
+            _ = try? handle.seekToEnd()
             handle.write(data)
             try? handle.close()
         } else {

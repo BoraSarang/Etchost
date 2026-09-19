@@ -21,30 +21,37 @@ struct ProfileSidebar: View {
                 profileList
             case .fragments:
                 fragmentList
+            case .network:
+                tunnelList
             }
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button {
-                    switch model.sidebarSection {
-                    case .profiles:
-                        createProfile()
-                    case .fragments:
-                        createFragment()
+                if model.sidebarSection != .network {
+                    Button {
+                        switch model.sidebarSection {
+                        case .profiles:
+                            createProfile()
+                        case .fragments:
+                            createFragment()
+                        case .network:
+                            break
+                        }
+                    } label: {
+                        Label("추가", systemImage: "plus")
                     }
-                } label: {
-                    Label("추가", systemImage: "plus")
                 }
             }
         }
     }
 
-    // MARK: - 탭 바 (한 줄, 50%씩 채움)
+    // MARK: - 탭 바 (한 줄, 균등 분할)
 
     private var tabBar: some View {
         HStack(spacing: 2) {
             tabButton(.profiles)
             tabButton(.fragments)
+            tabButton(.network)
         }
         .padding(2)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
@@ -207,6 +214,56 @@ struct ProfileSidebar: View {
             parts.append(users.map(\.name).joined(separator: ", ") + "에서 사용")
         }
         return parts.joined(separator: " · ")
+    }
+
+    // MARK: - 네트워크 목록
+
+    private var tunnelList: some View {
+        Group {
+            if model.tunnelManager.tunnels.isEmpty {
+                ContentUnavailableView(
+                    "터널 없음",
+                    systemImage: "network",
+                    description: Text("상세 화면에서 포트 스캔 후 터널을 만들 수 있습니다.")
+                )
+            } else {
+                List {
+                    ForEach(model.tunnelManager.tunnels) { tunnel in
+                        tunnelRow(tunnel)
+                    }
+                }
+                .listStyle(.sidebar)
+            }
+        }
+    }
+
+    private func tunnelRow(_ tunnel: ManagedTunnel) -> some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(tunnelStatusColor(tunnel.status))
+                .frame(width: 8, height: 8)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(tunnel.label)
+                    .font(.body)
+                    .lineLimit(1)
+                Text("\(tunnel.ip):\(tunnel.port) · \(tunnel.status.title)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 4)
+        }
+        .contentShape(Rectangle())
+    }
+
+    private func tunnelStatusColor(_ status: TunnelStatus) -> Color {
+        switch status {
+        case .running: return .green
+        case .error: return .red
+        case .stopped: return .gray.opacity(0.5)
+        case .starting, .stopping: return .orange
+        default: return .gray
+        }
     }
 
     // MARK: - 상태카드

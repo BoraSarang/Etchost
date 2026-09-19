@@ -35,6 +35,8 @@ struct ContentView: View {
                             description: Text("좌측 + 버튼으로 첫 조각을 만드세요.")
                         )
                     }
+                case .network:
+                    NetworkView()
                 }
             }
         }

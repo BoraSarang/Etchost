@@ -5,6 +5,7 @@ import SwiftUI
 public enum SidebarSection: String, CaseIterable, Identifiable {
     case profiles
     case fragments
+    case network
 
     public var id: String { rawValue }
 
@@ -12,6 +13,7 @@ public enum SidebarSection: String, CaseIterable, Identifiable {
         switch self {
         case .profiles: return "프로필"
         case .fragments: return "프래그먼트"
+        case .network: return "네트워크"
         }
     }
 
@@ -19,6 +21,7 @@ public enum SidebarSection: String, CaseIterable, Identifiable {
         switch self {
         case .profiles: return "square.stack.3d.up"
         case .fragments: return "puzzlepiece"
+        case .network: return "network"
         }
     }
 }
@@ -38,6 +41,13 @@ public final class AppModel: ObservableObject {
     public var isApplying = false
     public var applyError: String?
     public var lastBackupURL: URL?
+    /// 네트워크 허브(포트 스캔 + cloudflared 터널) 공유 인스턴스.
+    public let tunnelManager = TunnelManager.shared
+
+    /// 현재 로컬 IP (네트워크 탭 표시용, 감시와 무관).
+    public var currentIP: String? {
+        IPMonitor.primaryIP()
+    }
 
     private let store: ProfileStore
     private let fragmentStore: FragmentStore
@@ -246,6 +256,10 @@ public final class AppModel: ObservableObject {
             case .cannotDeleteActiveProfile: return "활성 프로필은 삭제할 수 없습니다."
             case .profileNotFound: return "프로필을 찾을 수 없습니다."
             case .fragmentNotFound: return "프래그먼트를 찾을 수 없습니다."
+            case .tunnelNotFound: return "터널을 찾을 수 없습니다."
+            case .cloudflaredNotInstalled: return "cloudflared가 설치되어 있지 않습니다."
+            case .brewNotInstalled: return "Homebrew가 설치되지 않았습니다. https://brew.sh 를 확인하세요."
+            case .scanFailed(let msg): return "포트 스캔 실패: \(msg)"
             case .permissionDenied: return "관리자 권한이 필요합니다. 비밀번호를 확인하세요."
             case .applyFailed(let msg): return "/etc/hosts 적용에 실패했습니다: \(msg)"
             case .dnsFlushFailed(let msg): return "DNS 캐시 플러시에 실패했습니다: \(msg)"

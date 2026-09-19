@@ -59,8 +59,8 @@ struct HostEntryListView: View {
                         .scrollIndicators(.visible)
                         .onPasteCommand(of: [.plainText]) { providers in
                             guard let provider = providers.first else { return }
-                            provider.loadObject(ofClass: String.self) { object, _ in
-                                guard let text = object as? String else { return }
+                            _ = provider.loadObject(ofClass: String.self) { object, _ in
+                                guard let text = object else { return }
                                 Task { @MainActor in
                                     manualText = text
                                     registerManual()
