@@ -6,6 +6,37 @@ BUILD_DIR="$SCRIPT_DIR/build"
 INSTALL_DIR="$HOME/Applications"
 INSTALLED_APP="$INSTALL_DIR/Etchost.app"
 
+# 고정 코드서명 인증서: 재빌드에도 동일 CDHash 유지 -> macOS '로컬 네트워크'
+# TCC 허용이 빌드마다 무효화되는 것을 방지. 최초 1회 자동 생성해 로그인 키체인 등록.
+SIGN_IDENTITY="Etchost Dev Code Signing (borasarang)"
+SIGN_DIR="$BUILD_DIR/signing"
+
+ensure_signing_identity() {
+    if security find-identity -p codesigning 2>/dev/null | grep -q "$SIGN_IDENTITY"; then
+        return 0
+    fi
+    echo "   '$SIGN_IDENTITY' 서명 인증서를 키체인에 생성 (최초 1회)..."
+    mkdir -p "$SIGN_DIR"
+    local key="$SIGN_DIR/key.pem" csr="$SIGN_DIR/cert.csr" p12="$SIGN_DIR/identity.p12"
+    local ext="$SIGN_DIR/cert.cnf"
+    printf '%s\n' \
+        'basicConstraints=critical,CA:FALSE' \
+        'keyUsage=critical,digitalSignature' \
+        'extendedKeyUsage=codeSigning' \
+        'subjectKeyIdentifier=hash' > "$ext"
+    openssl genrsa -out "$key" 2048 2>/dev/null
+    openssl req -new -key "$key" -out "$csr" -subj "/CN=$SIGN_IDENTITY" 2>/dev/null
+    openssl x509 -req -in "$csr" -signkey "$key" -out "${csr%.csr}.pem" -days 3650 -extfile "$ext" -sha256 2>/dev/null
+    openssl pkcs12 -export -legacy -out "$p12" -inkey "$key" -in "${csr%.csr}.pem" -passout pass:etchost 2>/dev/null
+    security import "$p12" -k "$HOME/Library/Keychains/login.keychain-db" -P etchost -T /usr/bin/codesign
+}
+
+sign_app() {
+    local app_path="$1"
+    ensure_signing_identity
+    codesign --force --deep --sign "$SIGN_IDENTITY" "$app_path"
+}
+
 usage() {
     cat <<EOF
 Usage: $0 <command>
@@ -36,6 +67,10 @@ build_app() {
         -destination 'platform=macOS' \
         -configuration "$config" \
         -derivedDataPath "$BUILD_DIR"
+    local app_path
+    app_path="$(find_built_app)"
+    echo "Signing with $SIGN_IDENTITY ..."
+    sign_app "$app_path"
 }
 
 find_built_app() {

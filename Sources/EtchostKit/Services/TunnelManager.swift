@@ -44,6 +44,7 @@ public final class TunnelManager: ObservableObject {
     private let monitor: IPMonitor
     private var cancellables: Set<AnyCancellable> = []
     private let knownPaths = ["/opt/homebrew/bin/cloudflared", "/usr/local/bin/cloudflared", "/usr/bin/cloudflared"]
+    private static let maxLogBytes = 200_000
 
     public init(store: TunnelStore = .shared, monitor: IPMonitor = IPMonitor()) {
         self.store = store
@@ -80,6 +81,11 @@ public final class TunnelManager: ObservableObject {
         return tunnels
     }
 
+    /// 터널의 최근 stdout/stderr 로그 (콘솔 뷰용). 최대 접두어는 버퍼 상한에서 관리.
+    public func logText(for id: UUID) -> String {
+        sessions[id]?.buffer ?? ""
+    }
+
     // MARK: - cloudflared 확인/설치/버전
 
     /// 현재 PATH + 알려진 경로에서 cloudflared 찾기.
@@ -105,6 +111,16 @@ public final class TunnelManager: ObservableObject {
         } else {
             cloudflaredVersion = nil
         }
+        maybeAutoStartTunnels()
+    }
+
+    /// 설정(앱 시작 시 자동 시작)이 켜져 있으면 저장된 전체 터널 시작.
+    private func maybeAutoStartTunnels() {
+        guard UserDefaults.standard.bool(forKey: SettingsKeys.autoStartTunnelsAtLaunch),
+              cloudflaredPath != nil else { return }
+        for id in sessions.keys where sessions[id]?.status == .stopped {
+            startTunnel(id)
+        }
     }
 
     public func ensureCloudflared() async throws {
@@ -127,7 +143,7 @@ public final class TunnelManager: ObservableObject {
         }
 
         isInstalling = true
-        installMessage = "brew install cloudflared 실행 중…"
+        installMessage = Loc.str("tunnel.install.installing")
         defer { isInstalling = false }
 
         let process = Process()
@@ -164,11 +180,11 @@ public final class TunnelManager: ObservableObject {
 
         await refreshCloudflared()
         if let version = cloudflaredVersion {
-            installMessage = "설치 완료 (cloudflared \(version))"
+            installMessage = Loc.str("tunnel.install.doneWithVersion", version)
         } else if cloudflaredPath != nil {
-            installMessage = "설치 완료"
+            installMessage = Loc.str("tunnel.install.done")
         } else {
-            installMessage = "설치 실패 — 터미널에서 'brew install cloudflared' 실행을 확인하세요."
+            installMessage = Loc.str("tunnel.install.failed")
         }
     }
 
@@ -294,8 +310,13 @@ public final class TunnelManager: ObservableObject {
     // MARK: - 출력/종료
 
     private func consumeOutput(_ id: UUID, _ text: String) {
-        guard sessions[id] != nil else { return }
-        sessions[id]?.buffer.append(text)
+        guard var session = sessions[id] else { return }
+        // 로그 버퍼 상한 유지 (전역 접근 배타성 위해 로컬 복사 후 재삽입).
+        session.buffer.append(text)
+        if session.buffer.count > Self.maxLogBytes {
+            session.buffer.removeFirst(session.buffer.count - Self.maxLogBytes)
+        }
+        sessions[id] = session
 
         if sessions[id]?.publicDomain == nil,
            let domain = CloudflareLogParser.parseDomain(from: text) {
@@ -321,14 +342,19 @@ public final class TunnelManager: ObservableObject {
 
     private func terminationDidOccur(_ id: UUID) {
         guard var session = sessions[id] else { return }
+        let wasActive = session.status == .running || session.status == .starting
         session.process = nil
-        if session.status == .running || session.status == .starting {
-            session.status = session.publicDomain != nil ? .stopped : .error("프로세스가 예기치 않게 종료되었습니다.")
+        if wasActive {
+            session.status = session.publicDomain != nil ? .stopped : .error(Loc.str("tunnel.terminated"))
         } else if session.status == .stopping {
             session.status = .stopped
         }
         sessions[id] = session
         publish()
+        // 자동 재연결 설정이 켜져 있고, 정지 명령이 아니라 예기치 않은 종료였을 때만 재시작.
+        if wasActive, UserDefaults.standard.bool(forKey: SettingsKeys.autoRebookTunnels) {
+            startTunnel(id)
+        }
     }
 
     // MARK: - 헬퍼

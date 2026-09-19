@@ -2,31 +2,8 @@ import EtchostKit
 import Foundation
 import SwiftUI
 
-public enum SidebarSection: String, CaseIterable, Identifiable {
-    case profiles
-    case fragments
-    case network
-
-    public var id: String { rawValue }
-
-    public var title: String {
-        switch self {
-        case .profiles: return "프로필"
-        case .fragments: return "프래그먼트"
-        case .network: return "네트워크"
-        }
-    }
-
-    public var systemImage: String {
-        switch self {
-        case .profiles: return "square.stack.3d.up"
-        case .fragments: return "puzzlepiece"
-        case .network: return "network"
-        }
-    }
-}
-
 /// 코디네이터: 프로필 + 프래그먼트 목록, 선택, 적용 상태 관리.
+/// CRUD는 책임별 확장 파일(`AppModel+Profiles` / `AppModel+Fragments` / `AppModel+Apply`)에 분산.
 @MainActor
 @Observable
 public final class AppModel: ObservableObject {
@@ -44,13 +21,8 @@ public final class AppModel: ObservableObject {
     /// 네트워크 허브(포트 스캔 + cloudflared 터널) 공유 인스턴스.
     public let tunnelManager = TunnelManager.shared
 
-    /// 현재 로컬 IP (네트워크 탭 표시용, 감시와 무관).
-    public var currentIP: String? {
-        IPMonitor.primaryIP()
-    }
-
-    private let store: ProfileStore
-    private let fragmentStore: FragmentStore
+    let store: ProfileStore
+    let fragmentStore: FragmentStore
 
     public init(store: ProfileStore = .shared, fragmentStore: FragmentStore = .shared) {
         self.store = store
@@ -100,18 +72,41 @@ public final class AppModel: ObservableObject {
         profiles.contains { needsReapply($0) }
     }
 
+    // MARK: - 현재 hosts / 네트워크 정보 읽기
+
     /// 실제 /etc/hosts 내용. 읽기 실패하면 활성 프로필 합성 결과로 폴백.
+    /// 파일 읽기는 짧은 TTL 동안 캐시해 뷰 body 반복 평가를 완화 (외부 변경은 최대 2초 지연).
+    @ObservationIgnored private var hostsReadCache: (text: String, date: Date)?
+
     public private(set) var lastHostsIsLive = true
     public var currentHosts: String {
+        if let cache = hostsReadCache, Date().timeIntervalSince(cache.date) < 2.0 {
+            return cache.text
+        }
         let url = URL(fileURLWithPath: "/etc/hosts")
         if let data = try? Data(contentsOf: url),
            let text = String(data: data, encoding: .utf8), !text.isEmpty {
             lastHostsIsLive = true
+            hostsReadCache = (text, Date())
             return text
         }
         lastHostsIsLive = false
         guard let active = store.active() else { return "" }
-        return Composer.shared.compose(profile: active, fragments: fragmentStore.all())
+        let text = Composer.shared.compose(profile: active, fragments: fragmentStore.all())
+        hostsReadCache = (text, Date())
+        return text
+    }
+
+    /// 현재 로컬 IP (네트워크 탭 표시용). 인터페이스 열거가 비싸 5초 TTL 캐시.
+    @ObservationIgnored private var ipCache: (value: String?, date: Date)?
+
+    public var currentIP: String? {
+        if let cache = ipCache, Date().timeIntervalSince(cache.date) < 5.0 {
+            return cache.value
+        }
+        let value = IPMonitor.primaryIP()
+        ipCache = (value, Date())
+        return value
     }
 
     /// 메뉴바 팝오버 표용 행 (그룹/IP/호스트/주석/상태).
@@ -119,161 +114,20 @@ public final class AppModel: ObservableObject {
         HostEntry.tableRows(from: currentHosts)
     }
 
-    public func profilesUsing(_ fragmentID: UUID) -> [Profile] {
-        profiles.filter { $0.fragmentIDs.contains(fragmentID) }
-    }
-
-    // MARK: - Profile CRUD
-
-    public func createProfile(name: String) throws {
-        let profile = try store.create(name: name)
-        refresh()
-        sidebarSection = .profiles
-        selectedProfileID = profile.id
-    }
-
-    public func renameProfile(_ id: UUID, to name: String) throws {
-        guard var profile = store.get(id) else { throw EtchostError.profileNotFound(id) }
-        profile.updateName(name.trimmingCharacters(in: .whitespacesAndNewlines))
-        try store.update(profile)
-        refresh()
-    }
-
-    public func updateEntries(_ id: UUID, entries: [HostEntry]) throws {
-        guard var profile = store.get(id) else { throw EtchostError.profileNotFound(id) }
-        profile.updateEntries(entries)
-        try store.update(profile)
-        refresh()
-    }
-
-    public func deleteProfile(_ id: UUID) throws {
-        try store.delete(id)
-        refresh()
-    }
-
-    public func reorderProfiles(_ ids: [UUID]) {
-        store.reorder(ids)
-        refresh()
-    }
-
+    /// 편집을 스토어 원본으로 되돌림 (= 메모리 목록 새로고침).
     public func cancelEdit(_ id: UUID) {
-        // 스토어 원본으로 되돌림 = 메모리 목록 새로고침
         refresh()
-    }
-
-    // MARK: - Fragment CRUD
-
-    public func createFragment(name: String) throws {
-        let fragment = try fragmentStore.create(name: name)
-        refresh()
-        sidebarSection = .fragments
-        selectedFragmentID = fragment.id
-    }
-
-    public func renameFragment(_ id: UUID, to name: String) throws {
-        guard var fragment = fragmentStore.get(id) else { throw EtchostError.fragmentNotFound(id) }
-        fragment.updateName(name.trimmingCharacters(in: .whitespacesAndNewlines))
-        try fragmentStore.update(fragment)
-        refresh()
-    }
-
-    public func updateFragmentEntries(_ id: UUID, entries: [HostEntry]) throws {
-        guard var fragment = fragmentStore.get(id) else { throw EtchostError.fragmentNotFound(id) }
-        fragment.updateEntries(entries)
-        try fragmentStore.update(fragment)
-        refresh()
-    }
-
-    /// 삭제 시 켠 프로필에서 자동 해제 (연쇄 해제).
-    public func deleteFragment(_ id: UUID) throws {
-        guard fragmentStore.get(id) != nil else { throw EtchostError.fragmentNotFound(id) }
-        for var profile in profiles where profile.fragmentIDs.contains(id) {
-            profile.toggleFragment(id)
-            try store.update(profile)
-        }
-        try fragmentStore.delete(id)
-        refresh()
-    }
-
-    public func reorderFragments(_ ids: [UUID]) {
-        fragmentStore.reorder(ids)
-        refresh()
-    }
-
-    public func toggleFragment(profileID: UUID, fragmentID: UUID) throws {
-        guard var profile = store.get(profileID) else { throw EtchostError.profileNotFound(profileID) }
-        guard fragmentStore.get(fragmentID) != nil else { throw EtchostError.fragmentNotFound(fragmentID) }
-        profile.toggleFragment(fragmentID)
-        try store.update(profile)
-        refresh()
-    }
-
-    // MARK: - 메뉴바 즉시 적용 경로
-
-    /// 메뉴바 클릭 시: setActive + /etc/hosts 쓰기. 암호 프롬프트 1회.
-    public func switchAndApply(_ id: UUID) async {
-        do {
-            try store.setActive(id)
-            refresh()
-            selectedProfileID = id
-            await applyActiveProfile()
-        } catch {
-            applyError = describe(error)
-        }
-    }
-
-    public func applyActiveProfile() async {
-        guard let active = store.active() else {
-            applyError = "활성 프로필이 없습니다."
-            return
-        }
-        isApplying = true
-        applyError = nil
-        defer { isApplying = false }
-
-        let allFragments = fragmentStore.all()
-        let content = Composer.shared.compose(profile: active, fragments: allFragments)
-        lastBackupURL = BackupManager.shared.backupCurrentHosts()
-
-        do {
-            try await Applier.shared.apply(content)
-            var updated = active
-            updated.markApplied(
-                fingerprint: Composer.shared.fingerprint(profile: active, fragments: allFragments))
-            try store.update(updated)
-            refresh()
-            NotificationCenter.default.post(name: .hostsApplied, object: nil)
-        } catch {
-            applyError = describe(error)
-        }
     }
 
     public func describe(_ error: Error) -> String {
         if let typed = error as? EtchostError {
-            switch typed {
-            case .duplicateProfileName(let name): return "이미 존재하는 프로필 이름입니다: \(name)"
-            case .duplicateFragmentName(let name): return "이미 존재하는 프래그먼트 이름입니다: \(name)"
-            case .cannotDeleteActiveProfile: return "활성 프로필은 삭제할 수 없습니다."
-            case .profileNotFound: return "프로필을 찾을 수 없습니다."
-            case .fragmentNotFound: return "프래그먼트를 찾을 수 없습니다."
-            case .tunnelNotFound: return "터널을 찾을 수 없습니다."
-            case .cloudflaredNotInstalled: return "cloudflared가 설치되어 있지 않습니다."
-            case .brewNotInstalled: return "Homebrew가 설치되지 않았습니다. https://brew.sh 를 확인하세요."
-            case .scanFailed(let msg): return "포트 스캔 실패: \(msg)"
-            case .permissionDenied: return "관리자 권한이 필요합니다. 비밀번호를 확인하세요."
-            case .applyFailed(let msg): return "/etc/hosts 적용에 실패했습니다: \(msg)"
-            case .dnsFlushFailed(let msg): return "DNS 캐시 플러시에 실패했습니다: \(msg)"
-            case .backupFailed(let msg): return "백업 생성에 실패했습니다: \(msg)"
-            case .ioError(let msg): return "파일 입출력 오류: \(msg)"
-            case .invalidHostEntry(let msg): return "잘못된 호스트 항목입니다: \(msg)"
-            case .unknown(let msg): return "알 수 없는 오류: \(msg)"
-            @unknown default: return error.localizedDescription
-            }
+            return typed.errorDescription ?? typed.localizedDescription
         }
         return error.localizedDescription
     }
-}
 
-public extension Notification.Name {
-    static let openMainWindow = Notification.Name("etchost.openMainWindow")
+    /// 백업과 무관한 호출부에서는 캐시 무효화 없이 TTL에만 의존.
+    public func invalidateHostsCache() {
+        hostsReadCache = nil
+    }
 }

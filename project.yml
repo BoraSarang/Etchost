@@ -5,6 +5,7 @@ options:
     macOS: "26.0"
   createIntermediateGroups: true
   xcodeVersion: "26.0"
+  developmentLanguage: ko
 settings:
   base:
     SWIFT_VERSION: "6.0"
@@ -31,6 +32,8 @@ targets:
       - Sources/EtchostApp
     resources:
       - Sources/EtchostApp/Resources/Assets.xcassets
+      - Sources/EtchostApp/Resources/en.lproj
+      - Sources/EtchostApp/Resources/ko.lproj
     settings:
       base:
         INFOPLIST_FILE: Sources/EtchostApp/Resources/Info.plist

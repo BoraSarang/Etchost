@@ -242,7 +242,7 @@ struct HostsTableRowsTests {
         """
         let rows = HostEntry.tableRows(from: text)
         #expect(rows.count == 3)
-        #expect(rows[0].group == "기본 loopback")
+        #expect(rows[0].group == Loc.str("hosts.group.baseline"))
         #expect(rows[0].ip == "127.0.0.1")
         #expect(rows[1].group == "# Profile: 개발")
         #expect(rows[1].host == "host")

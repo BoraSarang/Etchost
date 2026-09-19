@@ -1,9 +1,22 @@
 import SwiftUI
 
-enum EditorMode: String, CaseIterable, Identifiable {
-    case edit = "편집"
-    case preview = "미리보기"
-    var id: String { rawValue }
+enum EditorMode: CaseIterable, Identifiable {
+    case edit
+    case preview
+
+    var id: String {
+        switch self {
+        case .edit: return "edit"
+        case .preview: return "preview"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .edit: return L.str("editor.mode.edit")
+        case .preview: return L.str("editor.mode.preview")
+        }
+    }
 }
 
 /// hosts 파일 한 줄의 판독형 행: 주석=회색, 비활성=주황, 정상 항목=모노스페이스 기본색.

@@ -38,7 +38,7 @@ struct ProfileSidebar: View {
                             break
                         }
                     } label: {
-                        Label("추가", systemImage: "plus")
+                        Label(L.str("sidebar.add"), systemImage: "plus")
                     }
                 }
             }
@@ -119,7 +119,7 @@ struct ProfileSidebar: View {
                 .frame(width: 8, height: 8)
             VStack(alignment: .leading, spacing: 2) {
                 if renamingID == profile.id {
-                    TextField("프로필 이름", text: $renameText, onCommit: {
+                    TextField(L.str("sidebar.profileName"), text: $renameText, onCommit: {
                         commitProfileRename(profile)
                     })
                     .textFieldStyle(.roundedBorder)
@@ -146,15 +146,15 @@ struct ProfileSidebar: View {
             }
         }
         .contextMenu {
-            Button("활성화 + 적용") {
+            Button(L.str("sidebar.activateAndApply")) {
                 Task { await model.switchAndApply(profile.id) }
             }
             .disabled(profile.isActive)
-            Button("이름 변경") {
+            Button(L.str("sidebar.rename")) {
                 renamingID = profile.id
                 renameText = profile.name
             }
-            Button("삭제", role: .destructive) {
+            Button(L.str("sidebar.delete"), role: .destructive) {
                 try? model.deleteProfile(profile.id)
             }
             .disabled(profile.isActive)
@@ -162,12 +162,12 @@ struct ProfileSidebar: View {
     }
 
     private func subtitle(profile: Profile) -> String {
-        var parts = ["\(profile.entries.count) 항목 · \(profile.enabledCount) 활성"]
+        var parts = [L.str("sidebar.subtitle.entries", profile.entries.count, profile.enabledCount)]
         if !profile.fragmentIDs.isEmpty {
             let names = profile.fragmentIDs.compactMap { id in
                 model.fragments.first { $0.id == id }?.name
             }
-            parts.append(names.isEmpty ? "프래그먼트 \(profile.fragmentIDs.count)" : names.joined(separator: ", "))
+            parts.append(names.isEmpty ? L.str("sidebar.subtitle.fragmentCount", profile.fragmentIDs.count) : names.joined(separator: ", "))
         }
         return parts.joined(separator: " · ")
     }
@@ -181,7 +181,7 @@ struct ProfileSidebar: View {
                 .font(.caption)
             VStack(alignment: .leading, spacing: 2) {
                 if renamingID == fragment.id {
-                    TextField("프래그먼트 이름", text: $renameText, onCommit: {
+                    TextField(L.str("sidebar.fragmentName"), text: $renameText, onCommit: {
                         commitFragmentRename(fragment)
                     })
                     .textFieldStyle(.roundedBorder)
@@ -197,11 +197,11 @@ struct ProfileSidebar: View {
             .lineLimit(1)
         }
         .contextMenu {
-            Button("이름 변경") {
+            Button(L.str("sidebar.rename")) {
                 renamingID = fragment.id
                 renameText = fragment.name
             }
-            Button("삭제", role: .destructive) {
+            Button(L.str("sidebar.delete"), role: .destructive) {
                 try? model.deleteFragment(fragment.id)
             }
         }
@@ -209,33 +209,38 @@ struct ProfileSidebar: View {
 
     private func fragmentUsage(_ fragment: Fragment) -> String {
         let users = model.profilesUsing(fragment.id)
-        var parts = ["\(fragment.entries.count) 항목 · \(fragment.enabledCount) 활성"]
+        var parts = [L.str("sidebar.subtitle.entries", fragment.entries.count, fragment.enabledCount)]
         if !users.isEmpty {
-            parts.append(users.map(\.name).joined(separator: ", ") + "에서 사용")
+            parts.append(L.str("sidebar.subtitle.usedBy", users.map(\.name).joined(separator: ", ")))
         }
         return parts.joined(separator: " · ")
     }
 
     // MARK: - 네트워크 목록
 
-    private var tunnelList: some View {
-        Group {
-            if model.tunnelManager.tunnels.isEmpty {
-                ContentUnavailableView(
-                    "터널 없음",
-                    systemImage: "network",
-                    description: Text("상세 화면에서 포트 스캔 후 터널을 만들 수 있습니다.")
-                )
-            } else {
-                List {
-                    ForEach(model.tunnelManager.tunnels) { tunnel in
-                        tunnelRow(tunnel)
-                    }
+private var tunnelList: some View {
+    List {
+        if model.tunnelManager.tunnels.isEmpty {
+            HStack(spacing: 8) {
+                Image(systemName: "network")
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(L.str("sidebar.tunnel.none"))
+                        .font(.body)
+                    Text(L.str("sidebar.tunnel.scanHint"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                .listStyle(.sidebar)
+            }
+            .padding(.vertical, 4)
+        } else {
+            ForEach(model.tunnelManager.tunnels) { tunnel in
+                tunnelRow(tunnel)
             }
         }
     }
+    .listStyle(.sidebar)
+}
 
     private func tunnelRow(_ tunnel: ManagedTunnel) -> some View {
         HStack(spacing: 8) {
@@ -271,7 +276,7 @@ struct ProfileSidebar: View {
     private var statusCard: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Label("상태", systemImage: "server.rack")
+                Label(L.str("sidebar.status"), systemImage: "server.rack")
                     .font(.body)
                 Spacer()
                 Circle()
@@ -281,7 +286,7 @@ struct ProfileSidebar: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Text("활성: \(model.activeProfile?.name ?? "없음")")
+            Text(L.str("sidebar.activeProfile", model.activeProfile?.name ?? L.str("sidebar.active.none")))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -296,8 +301,8 @@ struct ProfileSidebar: View {
     }
 
     private var headerText: String {
-        guard model.activeProfile != nil else { return "프로필 없음" }
-        return model.anyNeedsReapply ? "적용 필요" : "적용됨"
+        guard model.activeProfile != nil else { return L.str("sidebar.status.noProfile") }
+        return model.anyNeedsReapply ? L.str("sidebar.status.needsReapply") : L.str("sidebar.status.applied")
     }
 
     private func dotColor(isActive: Bool, reapply: Bool) -> Color {
@@ -308,7 +313,7 @@ struct ProfileSidebar: View {
     // MARK: - 생성·이름변경
 
     private func createProfile() {
-        let name = "새 프로필 \(model.profiles.count + 1)"
+        let name = L.str("sidebar.newProfile", model.profiles.count + 1)
         try? model.createProfile(name: name)
         if let fresh = model.profiles.first(where: { $0.name == name }) {
             renamingID = fresh.id
@@ -317,7 +322,7 @@ struct ProfileSidebar: View {
     }
 
     private func createFragment() {
-        let name = "새 프래그먼트 \(model.fragments.count + 1)"
+        let name = L.str("sidebar.newFragment", model.fragments.count + 1)
         try? model.createFragment(name: name)
         if let fresh = model.fragments.first(where: { $0.name == name }) {
             renamingID = fresh.id

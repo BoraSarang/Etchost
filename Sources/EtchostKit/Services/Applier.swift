@@ -17,7 +17,7 @@ public struct Applier: Sendable {
         do {
             try content.write(to: tempURL, atomically: true, encoding: .utf8)
         } catch {
-            throw EtchostError.applyFailed("임시 파일 작성 실패: \(error.localizedDescription)")
+            throw EtchostError.applyFailed(Loc.str("applier.tempWriteFailed", error.localizedDescription))
         }
         defer { try? FileManager.default.removeItem(at: tempURL) }
 
@@ -25,12 +25,12 @@ public struct Applier: Sendable {
         // killall -HUP mDNSResponder는 root 소유 프로세스라 일반 권한에서
         // "No matching processes" 로 실패하므로 반드시 관리자 권한 안에서 실행.
         let script = #"cp "\#(tempURL.path)" "\#(hostsPath)" && dscacheutil -flushcache && killall -HUP mDNSResponder"#
-        let result = await runPrivileged(script, prompt: "Etchost가 /etc/hosts 파일을 업데이트하려고 합니다.")
+        let result = await runPrivileged(script, prompt: Loc.str("applier.prompt"))
         guard result.success else {
             if (result.error ?? "").contains("User canceled") || (result.error ?? "").contains("-128") {
                 throw EtchostError.permissionDenied
             }
-            throw EtchostError.applyFailed(result.error ?? "알 수 없는 오류")
+            throw EtchostError.applyFailed(result.error ?? Loc.str("applier.unknownError"))
         }
     }
 

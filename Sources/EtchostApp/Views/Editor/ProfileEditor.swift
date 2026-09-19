@@ -13,22 +13,47 @@ struct ProfileEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            header
-            Picker("모드", selection: $mode) {
-                ForEach(EditorMode.allCases) { mode in
-                    Text(mode.rawValue).tag(mode)
+            EditorHeader(
+                name: $name,
+                nameLabel: L.str("editor.profile.name"),
+                subtitle: L.str(
+                    "editor.profile.subtitle",
+                    entries.count,
+                    entries.filter(\.isEnabled).count,
+                    model.needsReapply(profile) ? L.str("editor.needsReapply") : L.str("editor.applied")
+                )
+            ) {
+                if profile.isActive {
+                    Label(L.str("editor.active"), systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                        .font(.caption)
                 }
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
+            EditorModePicker(mode: $mode)
             Divider()
             if mode == .edit {
                 fragmentToggles
                 HostEntryListView(entries: $entries)
             } else {
-                draftPreview
+                EditorPreview(hint: L.str("editor.preview.profileHint"), text: previewText)
             }
-            footer
+            EditorFooter(
+                canCancel: isDirty,
+                canSave: isDirty && !anyInvalid && !editorNameEmpty(name),
+                canApply: !model.isApplying && !anyInvalid,
+                applyTitle: profile.isActive ? L.str("editor.apply") : L.str("editor.activateAndApply"),
+                error: model.applyError,
+                onCancel: {
+                    syncFromProfile()
+                    model.cancelEdit(profile.id)
+                    saveMessage = L.str("editor.cancelled")
+                },
+                onSave: { save() },
+                onApply: {
+                    saveIfDirty()
+                    Task { await applyFlow() }
+                }
+            )
         }
         .padding(16)
         .onAppear { syncFromProfile() }
@@ -40,7 +65,7 @@ struct ProfileEditor: View {
         Group {
             if !model.fragments.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("프래그먼트")
+                    Text(L.str("editor.fragments"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     ForEach(model.fragments) { fragment in
@@ -59,80 +84,18 @@ struct ProfileEditor: View {
         }
     }
 
-    /// 편집 중 내용을 실제 합성 규칙(기본 loopback + 프래그먼트)으로 렌더링한 미리보기.
-    private var draftPreview: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("이대로 적용하면 /etc/hosts에 쓰일 내용 (저장 전 편집 상태 반영)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            HostsLineList(text: previewText)
-        }
-    }
-
     private var previewText: String {
         var draft = profile
         draft.updateEntries(entries)
         return Composer.shared.compose(profile: draft, fragments: model.fragments)
     }
 
-    private var header: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                TextField("프로필 이름", text: $name)
-                    .font(.title2.bold())
-                    .textFieldStyle(.plain)
-                Text("\(entries.count) 항목 · \(entries.filter(\.isEnabled).count) 활성 · \(model.needsReapply(profile) ? "적용 필요" : "적용됨")")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            if profile.isActive {
-                Label("활성", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                    .font(.caption)
-            }
-        }
-    }
-
-    private var footer: some View {
-        HStack {
-            Button("취소") {
-                syncFromProfile()
-                model.cancelEdit(profile.id)
-                saveMessage = "변경 취소됨"
-            }
-            .keyboardShortcut(.cancelAction)
-            .disabled(!isDirty)
-
-            Spacer()
-
-            if let err = model.applyError {
-                Text(err)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .lineLimit(2)
-            }
-
-            Button("저장") { save() }
-                .keyboardShortcut("s", modifiers: .command)
-                .disabled(!isDirty || anyInvalid || name.trimmingCharacters(in: .whitespaces).isEmpty)
-
-            Button(profile.isActive ? "다시 적용" : "활성화 + 적용") {
-                saveIfDirty()
-                Task { await applyFlow() }
-            }
-            .keyboardShortcut("r", modifiers: .command)
-            .buttonStyle(.borderedProminent)
-            .disabled(model.isApplying || anyInvalid)
-        }
-    }
-
     private var anyInvalid: Bool {
-        entries.contains { !HostEntry.isValidIP($0.ip) || !HostEntry.isWellFormedDomain($0.domain) }
+        editorAnyInvalid(entries)
     }
 
     private var isDirty: Bool {
-        name.trimmingCharacters(in: .whitespacesAndNewlines) != profile.name || entries != profile.entries
+        editorIsDirty(name: name, entries: entries, originalName: profile.name, originalEntries: profile.entries)
     }
 
     private func syncFromProfile() {
@@ -147,7 +110,7 @@ struct ProfileEditor: View {
 
     private func save() {
         guard !anyInvalid else {
-            saveMessage = "무효한 항목이 있어 저장할 수 없습니다."
+            saveMessage = L.str("editor.invalidSave")
             return
         }
         do {
@@ -156,7 +119,7 @@ struct ProfileEditor: View {
                 try model.renameProfile(profile.id, to: trimmedName)
             }
             try model.updateEntries(profile.id, entries: entries)
-            saveMessage = "저장됨 — 적용하면 /etc/hosts에 반영됩니다"
+            saveMessage = L.str("editor.saved.profile")
         } catch {
             saveMessage = model.describe(error)
         }
@@ -170,7 +133,7 @@ struct ProfileEditor: View {
             await model.applyActiveProfile()
         }
         if model.applyError == nil {
-            saveMessage = "적용됨"
+            saveMessage = L.str("editor.applied")
             syncFromProfile()
         }
     }

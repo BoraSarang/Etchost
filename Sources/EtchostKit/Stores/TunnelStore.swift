@@ -75,7 +75,7 @@ public final class TunnelStore: @unchecked Sendable {
             let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
             let safeLabel = trimmed.isEmpty ? "\(ip):\(port)" : trimmed
             guard !tunnels.values.contains(where: { $0.label == safeLabel }) else {
-                throw EtchostError.duplicateProfileName(safeLabel)
+                throw EtchostError.duplicateTunnelLabel(safeLabel)
             }
             let nextOrder = (tunnels.values.map(\.order).max() ?? -1) + 1
             let tunnel = Tunnel(label: safeLabel, ip: ip, port: port, order: nextOrder)

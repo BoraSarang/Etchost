@@ -159,7 +159,7 @@ public struct HostEntry: Codable, Equatable, Hashable, Sendable {
     /// 반영된 hosts 텍스트를 표(팝오버)용 행으로 파싱. 그룹(# Profile / # Fragment / 기본 loopback) 추적.
     public static func tableRows(from text: String) -> [HostsTableRow] {
         var rows: [HostsTableRow] = []
-        var group = "기본 loopback"
+        var group = Loc.str("hosts.group.baseline")
         for raw in text.components(separatedBy: .newlines) {
             let trimmed = raw.trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty { continue }

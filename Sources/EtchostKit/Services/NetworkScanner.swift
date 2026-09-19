@@ -1,6 +1,19 @@
 import Darwin
 import Foundation
 
+/// 스캔 진행 상황 (완료 프로브 수 / 전체 프로브 수 / 발견 포트 수).
+public struct ScanProgress: Equatable, Sendable {
+    public let completed: Int
+    public let total: Int
+    public let found: Int
+
+    public init(completed: Int, total: Int, found: Int) {
+        self.completed = completed
+        self.total = total
+        self.found = found
+    }
+}
+
 /// 로컬 네트워크 TCP 포트 스캐너 (외부 의존성 없음).
 /// non-blocking connect + select 타임아웃으로 동작하며, 호출은 전용 큐에서 실행되어
 /// cooperative 스레드풀을 막지 않는다. 동시성은 `ConcurrencyLimiter`로 상한.
@@ -15,7 +28,7 @@ public struct NetworkScanner: Sendable {
 
     private static let serviceByPort: [Int: String] = [
         22: "SSH", 80: "HTTP", 443: "HTTPS",
-        3000: "HTTP", 3001: "HTTP", 3002: "HTTP", 5173: "HTTP(개발)",
+        3000: "HTTP", 3001: "HTTP", 3002: "HTTP", 5173: Loc.str("network.service.http.dev"),
         8080: "HTTP", 8081: "HTTP", 5000: "HTTP",
         5432: "PostgreSQL", 6379: "Redis",
         2375: "Docker API", 2376: "Docker(TLS)",
@@ -27,7 +40,7 @@ public struct NetworkScanner: Sendable {
     ])
 
     public static func serviceName(for port: Int) -> String {
-        serviceByPort[port] ?? "기타"
+        serviceByPort[port] ?? Loc.str("network.service.other")
     }
 
     // MARK: - 주소 탐색
@@ -80,7 +93,9 @@ public struct NetworkScanner: Sendable {
         hosts: [String],
         ports: [Int],
         timeout: TimeInterval = 0.5,
-        fingerprint: Bool = true
+        fingerprint: Bool = true,
+        onFind: (@MainActor (PortScanResult) -> Void)? = nil,
+        onProgress: (@MainActor (ScanProgress) -> Void)? = nil
     ) async -> [PortScanResult] {
         guard !hosts.isEmpty, !ports.isEmpty else { return [] }
         let limiter = ConcurrencyLimiter(limit: 256)
@@ -105,10 +120,24 @@ public struct NetworkScanner: Sendable {
                     )
                 }
             }
+            var completed = 0
+            let reportStride = max(1, candidates.count / 100)
             for await result in group {
+                completed += 1
                 if let result {
                     pooled.append(result)
+                    if let onFind {
+                        await MainActor.run { onFind(result) }
+                    }
                 }
+                if let onProgress, completed % reportStride == 0 {
+                    let progress = ScanProgress(completed: completed, total: candidates.count, found: pooled.count)
+                    await MainActor.run { onProgress(progress) }
+                }
+            }
+            if let onProgress {
+                let progress = ScanProgress(completed: candidates.count, total: candidates.count, found: pooled.count)
+                await MainActor.run { onProgress(progress) }
             }
         }
 

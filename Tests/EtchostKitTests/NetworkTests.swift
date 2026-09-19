@@ -48,6 +48,18 @@ struct TunnelStoreTests {
         }
     }
 
+    @Test("같은 라벨 중복은 터널 전용 오류")
+    func duplicateLabelError() throws {
+        let store = try tempStore()
+        try store.create(label: "HTTP 도메인", ip: "127.0.0.1", port: 3000)
+        #expect(throws: EtchostError.duplicateTunnelLabel("HTTP 도메인")) {
+            try store.create(label: "HTTP 도메인", ip: "127.0.0.1", port: 3002)
+        }
+        // ip:port가 라벨에 포함되면 충돌 없이 추가 가능
+        try store.create(label: "HTTP 도메인 (127.0.0.1:3002)", ip: "127.0.0.1", port: 3002)
+        #expect(store.all().count == 2)
+    }
+
     @Test("삭제 + 없는 id 삭제 오류")
     func delete() throws {
         let store = try tempStore()
@@ -66,7 +78,7 @@ struct NetworkScannerTests {
     func serviceName() {
         #expect(NetworkScanner.serviceName(for: 22) == "SSH")
         #expect(NetworkScanner.serviceName(for: 3000) == "HTTP")
-        #expect(NetworkScanner.serviceName(for: 22_222) == "기타")
+        #expect(NetworkScanner.serviceName(for: 22_222) == Loc.str("network.service.other"))
     }
 
     @Test("지정 IP 기준 /24 서브넷 (broadcast/network 제외)")
@@ -90,9 +102,9 @@ struct NetworkScannerTests {
 struct TunnelModelTests {
     @Test("상태 제목")
     func statusTitles() {
-        #expect(TunnelStatus.stopped.title == "정지")
-        #expect(TunnelStatus.running.title == "실행 중")
-        #expect(TunnelStatus.error("x").title.contains("오류"))
+        #expect(TunnelStatus.stopped.title == Loc.str("tunnel.status.stopped"))
+        #expect(TunnelStatus.running.title == Loc.str("tunnel.status.running"))
+        #expect(TunnelStatus.error("x").title == Loc.str("tunnel.status.error", "x"))
         #expect(TunnelStatus.running.isActive == true)
         #expect(TunnelStatus.stopped.isActive == false)
     }

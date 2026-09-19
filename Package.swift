@@ -3,6 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "Etchost",
+    defaultLocalization: "ko",
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "EtchostKit", targets: ["EtchostKit"]),
@@ -14,7 +15,8 @@ let package = Package(
             dependencies: [],
             path: "Sources/EtchostKit",
             resources: [
-                .copy("Resources/error_message_ko.json"),
+                .process("Resources/ko.lproj"),
+                .process("Resources/en.lproj"),
             ],
             swiftSettings: [
                 .enableUpcomingFeature("InferSendableFromCaptures"),

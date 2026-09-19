@@ -7,9 +7,11 @@ public final class BackupManager: @unchecked Sendable {
 
     private let backupDir: URL
     private let hostsPath = "/etc/hosts"
-    private let maxBackups = 100
 
-    init(backupDir: URL? = nil) {
+    /// 백업 디렉터리 경로 (Finder 등에서 열기용).
+    public var backupDirectory: URL { backupDir }
+
+    public init(backupDir: URL? = nil) {
         if let backupDir {
             self.backupDir = backupDir
         } else if let supportDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
@@ -26,7 +28,7 @@ public final class BackupManager: @unchecked Sendable {
     @discardableResult
     public func backupCurrentHosts() -> URL? {
         guard let content = try? String(contentsOfFile: hostsPath, encoding: .utf8) else { return nil }
-        let name = "hosts-\(Date().ISO8601Format()).backup"
+        let name = "hosts-\(Date().ISO8601Format())-\(UUID().uuidString.lowercased().prefix(6)).backup"
         let url = backupDir.appendingPathComponent(name)
         do {
             try content.write(to: url, atomically: true, encoding: .utf8)
@@ -52,8 +54,17 @@ public final class BackupManager: @unchecked Sendable {
     }
 
     private func pruneOldBackups() {
-        for backup in listBackups().dropFirst(maxBackups) {
+        for backup in listBackups().dropFirst(backupRetentionLimit()) {
             try? FileManager.default.removeItem(at: backup)
         }
+    }
+
+    /// 설정(settings.backupRetention) 기준 보존 개수. 무효 값이면 기본값.
+    private func backupRetentionLimit() -> Int {
+        let stored = UserDefaults.standard.integer(forKey: SettingsKeys.backupRetention)
+        guard stored >= SettingsKeys.backupRetentionMin else {
+            return SettingsKeys.backupRetentionDefault
+        }
+        return min(stored, SettingsKeys.backupRetentionMax)
     }
 }

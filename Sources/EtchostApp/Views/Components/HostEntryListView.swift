@@ -1,3 +1,4 @@
+import AppKit
 import EtchostKit
 import SwiftUI
 
@@ -8,10 +9,16 @@ struct HostEntryListView: View {
     @State private var pendingFocusID: UUID?
     @State private var manualText = ""
     @State private var manualError: String?
+    @State private var editorWidth: CGFloat = 0
+
+    private struct EditorWidthKey: PreferenceKey {
+        nonisolated(unsafe) static var defaultValue: CGFloat = 0
+        static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("항목 (IP · 도메인 · 주석) — 잘못된 값은 저장을 막습니다")
+            Text(L.str("hosts.title"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -30,12 +37,12 @@ struct HostEntryListView: View {
             }
             .listStyle(.plain)
             .scrollIndicators(.visible)
-            .frame(minHeight: 150, idealHeight: 260, maxHeight: 340)
+            .frame(minHeight: 150, maxHeight: .infinity)
 
             Button {
                 addRow()
             } label: {
-                Label("항목 추가", systemImage: "plus.circle")
+                Label(L.str("hosts.add"), systemImage: "plus.circle")
             }
             .buttonStyle(.borderless)
 
@@ -48,41 +55,37 @@ struct HostEntryListView: View {
     /// textbox로 한 줄/여러 줄 입력받아 자동 파싱 후 등록.
     private var manualRegisterRow: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("수동 등록 (ip 도메인 #주석 — 탭/공백 혼용, 여러 줄 붙여넣기 가능)")
+            Text(L.str("hosts.manual"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
             HStack(spacing: 6) {
                 ZStack(alignment: .topLeading) {
-                    TextEditor(text: $manualText)
-                        .font(.system(.body, design: .monospaced))
-                        .scrollContentBackground(.hidden)
-                        .scrollIndicators(.visible)
-                        .onPasteCommand(of: [.plainText]) { providers in
-                            guard let provider = providers.first else { return }
-                            _ = provider.loadObject(ofClass: String.self) { object, _ in
-                                guard let text = object else { return }
-                                Task { @MainActor in
-                                    manualText = text
-                                    registerManual()
-                                }
-                            }
-                        }
+                    HostMultilineTextView(text: $manualText) {
+                        registerManual()
+                    }
                     if manualText.isEmpty {
-                        Text("예: 127.0.0.1 example.com # 기본  (여러 줄 붙여넣기하면 한 번에 등록)")
+                        Text(L.str("hosts.manual.placeholder"))
                             .font(.system(.body, design: .monospaced))
                             .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(6)
                             .allowsHitTesting(false)
                     }
                 }
                 .padding(4)
                 .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
-                .frame(minHeight: 66, maxHeight: 100)
-                Button("등록") {
+                .frame(height: manualEditorHeight)
+                Button(L.str("hosts.register")) {
                     registerManual()
                 }
                 .disabled(manualText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            .background(
+                GeometryReader { proxy in
+                    Color.clear.preference(key: EditorWidthKey.self, value: proxy.size.width)
+                }
+            )
+            .onPreferenceChange(EditorWidthKey.self) { width in
+                editorWidth = width
             }
             if let manualError {
                 Text(manualError)
@@ -90,6 +93,21 @@ struct HostEntryListView: View {
                     .foregroundStyle(.red)
             }
         }
+    }
+
+    /// 1~4줄 자동 높이: 입력량에 따라 늘어나고 4줄 초과는 편집기 내부 스크롤.
+    private var manualEditorHeight: CGFloat {
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let lineHeight = NSAttributedString(string: "Ag", attributes: [.font: font]).size().height
+        guard editorWidth > 40, !manualText.isEmpty else { return lineHeight + 12 }
+        let attr = NSAttributedString(string: manualText, attributes: [.font: font])
+        let bounds = attr.boundingRect(
+            with: CGSize(width: editorWidth - 24, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin]
+        )
+        let lines = max(1, Int(ceil(bounds.height / lineHeight)))
+        let capped = min(lines, 4)
+        return CGFloat(capped) * lineHeight + 12
     }
 
     private func registerManual() {
@@ -112,8 +130,8 @@ struct HostEntryListView: View {
         }
         if !invalidLines.isEmpty {
             manualError = added > 0
-                ? "\(added)개 등록됨 · 파싱 실패 \(invalidLines.count)줄: \(invalidLines.map(String.init).joined(separator: ", "))"
-                : "파싱 실패 \(invalidLines.count)줄: \(invalidLines.map(String.init).joined(separator: ", ")) — ip와 도메인이 필요합니다"
+                ? L.str("hosts.register.success", added, invalidLines.count, invalidLines.map(String.init).joined(separator: ", "))
+                : L.str("hosts.register.failed", invalidLines.count, invalidLines.map(String.init).joined(separator: ", "))
         }
     }
 
@@ -151,21 +169,21 @@ struct HostEntryRow: View {
                 Toggle("", isOn: $entry.isEnabled)
                     .toggleStyle(.switch)
                     .labelsHidden()
-                    .help(entry.isEnabled ? "활성" : "비활성 (# disabled:로 저장)")
+                    .help(entry.isEnabled ? L.str("hosts.row.enabled") : L.str("hosts.row.disabled"))
 
-                TextField("IP", text: ipBinding)
+                TextField(L.str("hosts.field.ip"), text: ipBinding)
                     .font(.system(.body, design: .monospaced))
                     .frame(width: 130)
                     .textFieldStyle(.plain)
                     .fieldBox(color: ipFieldColor)
                     .focused($ipFocused)
 
-                TextField("도메인 (host)", text: domainBinding)
+                TextField(L.str("hosts.field.domain"), text: domainBinding)
                     .font(.system(.body, design: .monospaced))
                     .textFieldStyle(.plain)
                     .fieldBox(color: domainFieldColor)
 
-                TextField("주석 (선택)", text: commentBinding)
+                TextField(L.str("hosts.field.comment"), text: commentBinding)
                     .textFieldStyle(.plain)
                     .frame(maxWidth: .infinity)
                     .fieldBox(color: nil)
@@ -175,7 +193,7 @@ struct HostEntryRow: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.borderless)
-                .help("항목 삭제")
+                .help(L.str("hosts.row.delete"))
             }
             if let note = note {
                 Text(note)
@@ -233,16 +251,16 @@ struct HostEntryRow: View {
 
     private var note: String? {
         if !entry.ip.isEmpty, !ipValid {
-            return "IP 오류: 올바른 IPv4(0–255) 또는 IPv6 주소여야 합니다."
+            return L.str("hosts.error.ip")
         }
         if !entry.domain.isEmpty, !domainValid {
-            return "도메인 오류: 공백이나 특수문자를 쓸 수 없습니다."
+            return L.str("hosts.error.domain")
         }
         if entry.domain.isEmpty {
-            return "도메인 입력 필요"
+            return L.str("hosts.error.domainRequired")
         }
         if isDuplicate {
-            return "중복 도메인: 같은 도메인이 여러 줄에 있습니다."
+            return L.str("hosts.error.duplicate")
         }
         return nil
     }
@@ -259,5 +277,82 @@ private extension View {
                         .stroke(color, lineWidth: 1)
                 }
             }
+    }
+}
+
+/// NSTextView 기반 다중 줄 텍스트 편집기.
+/// textContainerInset(6,6) + lineFragmentPadding(0)으로 인해 텍스트/커서가
+/// 박스 좌상단 (6,6)에서 시작해 SwiftUI placeholder와 정확히 겹친다.
+/// 입력량에 따라 높이가 자동 늘어나고, 4줄 초과는 내부 스크롤(휠 지원).
+struct HostMultilineTextView: NSViewRepresentable {
+    @Binding var text: String
+    var onMultiLinePaste: (() -> Void)?
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSScrollView()
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.autohidesScrollers = true
+        scroll.borderType = .noBorder
+
+        let textView = AutoRegisterTextView()
+        textView.isRichText = false
+        textView.allowsUndo = true
+        textView.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        textView.textColor = .labelColor
+        textView.backgroundColor = .clear
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.textContainerInset = NSSize(width: 6, height: 6)
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.delegate = context.coordinator
+        let coordinator = context.coordinator
+        textView.onPastedMultiLine = { [weak coordinator] in coordinator?.multiLinePasted() }
+        scroll.documentView = textView
+        context.coordinator.textView = textView
+        return scroll
+    }
+
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        guard let textView = context.coordinator.textView, textView.string != text else { return }
+        textView.string = text
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: HostMultilineTextView
+        weak var textView: NSTextView?
+
+        init(_ parent: HostMultilineTextView) {
+            self.parent = parent
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard let textView, parent.text != textView.string else { return }
+            parent.text = textView.string
+        }
+
+        func multiLinePasted() {
+            parent.onMultiLinePaste?()
+        }
+    }
+}
+
+/// 여러 줄 붙여넣기 감지 → 자동 등록 트리거.
+private final class AutoRegisterTextView: NSTextView {
+    var onPastedMultiLine: (() -> Void)?
+
+    override func paste(_ sender: Any?) {
+        let before = string
+        super.paste(sender)
+        if string != before, string.components(separatedBy: .newlines).count > 1 {
+            onPastedMultiLine?()
+        }
     }
 }

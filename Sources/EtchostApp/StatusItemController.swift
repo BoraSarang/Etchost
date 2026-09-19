@@ -25,6 +25,7 @@ final class StatusItemController: NSObject {
             image?.isTemplate = true
             button.image = image
             button.imagePosition = .imageOnly
+            button.toolTip = "Etchost - 호스트갈이"
             button.target = self
             button.action = #selector(togglePopover(_:))
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
@@ -33,10 +34,12 @@ final class StatusItemController: NSObject {
 
     private func setupPopover() {
         popover.behavior = .transient
-        popover.contentSize = NSSize(width: 430, height: 360)
-        popover.contentViewController = NSHostingController(
+        let hosting = NSHostingController(
             rootView: MenuBarPopover().environmentObject(model)
         )
+        // 콘텐츠 크기에 맞춰 자동 조절 (프로필/터널/호스트 수가 늘어나도 잘리지 않음).
+        hosting.sizingOptions = [.preferredContentSize]
+        popover.contentViewController = hosting
         popover.animates = true
     }
 

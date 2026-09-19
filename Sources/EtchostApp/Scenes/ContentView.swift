@@ -19,9 +19,9 @@ struct ContentView: View {
                             .id(selected.id)
                     } else {
                         ContentUnavailableView(
-                            "프로필 없음",
+                            L.str("content.noProfile.title"),
                             systemImage: "server.rack",
-                            description: Text("좌측 + 버튼으로 첫 프로필을 만드세요.")
+                            description: Text(L.str("content.noProfile.description"))
                         )
                     }
                 case .fragments:
@@ -30,9 +30,9 @@ struct ContentView: View {
                             .id(selected.id)
                     } else {
                         ContentUnavailableView(
-                            "프래그먼트 없음",
+                            L.str("content.noFragment.title"),
                             systemImage: "puzzlepiece",
-                            description: Text("좌측 + 버튼으로 첫 조각을 만드세요.")
+                            description: Text(L.str("content.noFragment.description"))
                         )
                     }
                 case .network:
@@ -46,7 +46,7 @@ struct ContentView: View {
                     Task { await model.applyActiveProfile() }
                 } label: {
                     Label(
-                        model.isApplying ? "적용 중…" : "적용",
+                        model.isApplying ? L.str("content.applying") : L.str("content.apply"),
                         systemImage: "checkmark.seal"
                     )
                 }
@@ -55,7 +55,7 @@ struct ContentView: View {
                 Button {
                     showingHostsPreview.toggle()
                 } label: {
-                    Label("반영 내용", systemImage: "doc.text.magnifyingglass")
+                    Label(L.str("content.previewLabel"), systemImage: "doc.text.magnifyingglass")
                 }
             }
         }

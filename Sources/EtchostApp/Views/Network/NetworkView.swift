@@ -13,13 +13,29 @@ struct NetworkView: View {
     @State private var isScanning = false
     @State private var scanError: String?
     @State private var lastTarget: String?
+    @State private var scanCompleted = 0
+    @State private var scanTotal = 0
+    @State private var cacheInfo: String?
+    @State private var logTunnelID: TunnelLogSelection?
+
+    private struct CachedScan: Codable {
+        let target: String
+        let scannedAt: Date
+        let ownIP: String
+        let results: [PortScanResult]
+    }
+
+    private struct TunnelLogSelection: Identifiable {
+        var id: UUID { tunnelID }
+        let tunnelID: UUID
+    }
 
     init() {
         _tunnels = ObservedObject(wrappedValue: TunnelManager.shared)
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 12) {
             cloudflaredBanner
             ipChangeBanner
             Divider()
@@ -27,7 +43,12 @@ struct NetworkView: View {
             Divider()
             tunnelSection
         }
-        .frame(maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(16)
+        .onAppear { loadCachedScanIfEmpty() }
+        .sheet(item: $logTunnelID) { selection in
+            TunnelLogSheet(tunnels: tunnels, id: selection.tunnelID)
+        }
     }
 
     // MARK: - cloudflared 상태 배너
@@ -37,49 +58,44 @@ struct NetworkView: View {
             if tunnels.cloudflaredPath != nil {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(.green)
-                Text("cloudflared \(tunnels.cloudflaredVersion ?? "설치됨")")
+                Text(L.str("network.cloudflare.badge", tunnels.cloudflaredVersion ?? L.str("network.cloudflare.installed")))
                     .font(.callout)
-                Text("· 현재 IP \(model.currentIP ?? "확인 중")")
+                Text(L.str("network.currentIP", model.currentIP ?? L.str("network.ip.checking")))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
             } else if tunnels.isInstalling {
                 ProgressView()
                     .controlSize(.small)
-                Text(tunnels.installMessage ?? "cloudflared 설치 중…")
+                Text(tunnels.installMessage ?? L.str("network.cloudflare.installing"))
                     .font(.callout)
                 Spacer()
             } else {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
-                Text("cloudflared가 없습니다 — 터널을 만들려면 설치가 필요합니다.")
+                Text(L.str("network.cloudflare.missing"))
                     .font(.callout)
                 Spacer()
-                Button("설치") {
+                Button(L.str("network.cloudflare.install")) {
                     Task { try? await tunnels.installCloudflared() }
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
             }
         }
-        .padding(10)
-        .background(.quaternary.opacity(0.5))
     }
 
     @ViewBuilder
     private var ipChangeBanner: some View {
-        if let change = tunnels.lastIPChange {
-            HStack(spacing: 8) {
-                Image(systemName: "arrow.triangle.2.circlepath")
-                    .foregroundStyle(.orange)
-                Text("IP 변경 \(change.old ?? "없음") → \(change.new) — 실행 중 터널 자동 재시작")
-                    .font(.caption)
-                Spacer()
+if let change = tunnels.lastIPChange {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .foregroundStyle(.orange)
+                    Text(L.str("network.ipChange", change.old ?? L.str("network.ipChange.none"), change.new))
+                        .font(.caption)
+                    Spacer()
+                }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(.orange.opacity(0.12))
-        }
     }
 
     // MARK: - 스캐너
@@ -87,7 +103,7 @@ struct NetworkView: View {
     private var scannerSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("포트 스캔")
+                Text(L.str("network.scan.title"))
                     .font(.headline)
                 Spacer()
                 if let target = lastTarget {
@@ -95,29 +111,59 @@ struct NetworkView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                if let cacheInfo {
+                    Text(cacheInfo)
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                }
             }
 
             HStack(spacing: 8) {
-                TextField("스캔 IP (비우면 localhost)", text: $hostInput)
+                TextField(L.str("network.scan.inputPlaceholder"), text: $hostInput)
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: .infinity)
-                Button("localhost 스캔") {
+                Button(L.str("network.scan.localhost")) {
                     startScan(hosts: ["127.0.0.1"])
                 }
                 .disabled(isScanning)
-                Button("LAN 스캔") {
-                    startScan(hosts: lanHosts())
+                Button(L.str("network.scan.lan")) {
+                    scanError = nil
+                    let hosts = lanHosts()
+                    guard !hosts.isEmpty else {
+                        scanError = L.str("network.scan.lanError")
+                        return
+                    }
+                    startScan(hosts: hosts)
                 }
                 .disabled(isScanning)
-                Button("지정 IP") {
+                Button(L.str("network.scan.custom")) {
                     let ip = hostInput.trimmingCharacters(in: .whitespaces)
                     startScan(hosts: ip.isEmpty ? ["127.0.0.1"] : [ip])
                 }
                 .disabled(isScanning)
-                if isScanning {
-                    ProgressView()
-                        .controlSize(.small)
+            }
+
+            if isScanning {
+                HStack(spacing: 10) {
+                    ProgressView(
+                        value: Double(scanCompleted),
+                        total: Double(max(scanTotal, 1))
+                    )
+                    .progressViewStyle(.linear)
+                    .frame(maxWidth: .infinity)
+                    Text(percentLabel)
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                    Text(L.str("network.scan.checking", scanCompleted, scanTotal))
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                    Text(L.str("network.scan.found", scanResults.count))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
+                .padding(.top, 6)
             }
 
             if let error = scanError {
@@ -130,50 +176,120 @@ struct NetworkView: View {
 
             HStack {
                 if let result = selectedScanResult {
-                    Text("선택: \(result.ip):\(result.port) (\(result.service))")
+                    Text(L.str("network.scan.selected", "\(result.ip):\(result.port)", result.service))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Button("터널 만들기") {
+                    Button(L.str("network.scan.createTunnel")) {
                         createTunnel(for: result)
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
                 } else {
                     Spacer()
-                    Text("결과 행을 선택하면 터널을 만들 수 있습니다.")
+                    Text(L.str("network.scan.selectHint"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
         }
-        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var scanResultsTable: some View {
         Table(scanResults, selection: $selectedResult) {
-            TableColumn("IP") { Text($0.ip) }
-            TableColumn("포트") { Text("\($0.port)") }
-            TableColumn("서비스") { Text($0.service) }
-            TableColumn("HTTP") { Text($0.httpServer ?? "–") }
+            TableColumn(L.str("network.scan.table.ip")) { Text($0.ip) }
+            TableColumn(L.str("network.scan.table.port")) { Text("\($0.port)") }
+            TableColumn(L.str("network.scan.table.service")) { Text($0.service) }
+            TableColumn(L.str("network.scan.table.http")) { Text($0.httpServer ?? "–") }
         }
         .frame(height: 160)
     }
 
     private func startScan(hosts: [String]) {
         guard !hosts.isEmpty else { return }
+        let ports = AppSettings.shared.configuredScanPorts ?? NetworkScanner.commonPorts
         scanError = nil
         isScanning = true
+        scanResults = []
+        scanCompleted = 0
+        scanTotal = hosts.count * ports.count
+        let started = Date()
         Task { @MainActor in
+            var seen: Set<String> = []
             let results = await NetworkScanner.shared.scan(
                 hosts: hosts,
-                ports: NetworkScanner.commonPorts,
+                ports: ports,
                 timeout: 1.0,
                 fingerprint: true
-            )
+            ) { result in
+                guard seen.insert("\(result.ip):\(result.port)").inserted else { return }
+                scanResults.append(result)
+            } onProgress: { progress in
+                scanCompleted = progress.completed
+            }
+            logScanDiagnostics(hosts: hosts, results: results, started: started, ownIP: NetworkScanner.localIPv4Addresses().first)
             scanResults = results
-            lastTarget = hosts.count > 1 ? "LAN \(hosts.count)개 호스트" : hosts.first
+            lastTarget = hosts.count > 1 ? L.str("network.scan.lastTarget.lan", hosts.count) : hosts.first
+            cacheInfo = nil
+            saveCachedScan(hosts: hosts, ownIP: NetworkScanner.localIPv4Addresses().first, results: results)
             isScanning = false
+        }
+    }
+
+    private var percentLabel: String {
+        guard scanTotal > 0 else { return "–" }
+        return "\(Int(Double(scanCompleted) / Double(scanTotal) * 100))%"
+    }
+
+    // MARK: - 스캔 결과 캐시
+
+    private var scanCacheURL: URL {
+        guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("Etchost-LastScan.json")
+        }
+        let dir = base.appendingPathComponent("Etchost", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("LastScan.json")
+    }
+
+    private func loadCachedScanIfEmpty() {
+        guard !isScanning, scanResults.isEmpty else { return }
+        guard let data = try? Data(contentsOf: scanCacheURL),
+              let cached = try? JSONDecoder().decode(CachedScan.self, from: data),
+              !cached.results.isEmpty else { return }
+        scanResults = cached.results
+        lastTarget = cached.target
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MM-dd HH:mm"
+        let time = formatter.string(from: cached.scannedAt)
+        cacheInfo = L.str("network.scan.cache", time, cached.ownIP)
+    }
+
+    private func saveCachedScan(hosts: [String], ownIP: String?, results: [PortScanResult]) {
+        guard !hosts.isEmpty else { return }
+        guard let first = hosts.first else { return }
+        let target = hosts.count > 1 ? L.str("network.scan.lastTarget.lan", hosts.count) : first
+        let cached = CachedScan(target: target, scannedAt: Date(), ownIP: ownIP ?? "", results: results)
+        if let data = try? JSONEncoder().encode(cached) {
+            try? data.write(to: scanCacheURL)
+        }
+    }
+
+    private func logScanDiagnostics(hosts: [String], results: [PortScanResult], started: Date, ownIP: String?) {
+        let fm = FileManager.default
+        guard let dir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
+        let url = dir.appendingPathComponent("Etchost/debug.log")
+        let found = results.map { "\($0.ip):\($0.port)" }.joined(separator: " ")
+        let elapsed = Date().timeIntervalSince(started)
+        let line = "\(Date().ISO8601Format()) [scan] own=\(ownIP ?? "-") range=\(hosts.first ?? "-")..\(hosts.last ?? "-") hosts=\(hosts.count) elapsed=\(String(format: "%.1f", elapsed))s found=[\(found)]\n"
+        guard let data = line.data(using: .utf8) else { return }
+        if fm.fileExists(atPath: url.path), let handle = try? FileHandle(forWritingTo: url) {
+            _ = try? handle.seekToEnd()
+            handle.write(data)
+            try? handle.close()
+        } else {
+            try? data.write(to: url)
         }
     }
 
@@ -186,7 +302,8 @@ struct NetworkView: View {
 
     private func createTunnel(for result: PortScanResult) {
         let base = result.service.isEmpty ? "port-\(result.port)" : result.service
-        let label = "\(base) 도메인"
+        // 같은 서비스 포트가 여러 개여도 이름 충돌 없도록 ip:port를 포함해 유니크하게.
+        let label = L.str("network.tunnel.labelFormat", base, result.ip, result.port)
         do {
             try tunnels.createTunnel(label: label, ip: result.ip, port: result.port, start: true)
         } catch {
@@ -199,34 +316,42 @@ struct NetworkView: View {
     private var tunnelSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("cloudflared 터널")
+                Text(L.str("network.tunnel.title"))
                     .font(.headline)
                 Spacer()
                 if !tunnels.tunnels.isEmpty {
-                    Text("IP \(model.currentIP ?? "확인 중")에 연결됨")
+                    Text(L.str("network.tunnel.connected", model.currentIP ?? L.str("network.ip.checking")))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
 
             if tunnels.tunnels.isEmpty {
-                ContentUnavailableView(
-                    "터널 없음",
-                    systemImage: "network",
-                    description: Text("스캔 결과 행을 선택하고 '터널 만들기'를 누르세요.")
-                )
+                HStack(spacing: 8) {
+                    Image(systemName: "network")
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(L.str("network.tunnel.none"))
+                            .font(.body)
+                        Text(L.str("network.tunnel.noneHint"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(.vertical, 4)
             } else {
                 tunnelTable
             }
         }
-        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     private var tunnelTable: some View {
         Table(tunnels.tunnels) {
-            TableColumn("이름") { Text($0.label).lineLimit(1) }
-            TableColumn("대상") { Text("\($0.ip):\($0.port)") }
-            TableColumn("상태") { tunnel in
+            TableColumn(L.str("network.tunnel.table.name")) { Text($0.label).lineLimit(1) }
+            TableColumn(L.str("network.tunnel.table.target")) { Text("\($0.ip):\($0.port)") }
+            TableColumn(L.str("network.tunnel.table.status")) { tunnel in
                 HStack(spacing: 5) {
                     Circle()
                         .fill(statusColor(tunnel.status))
@@ -234,7 +359,7 @@ struct NetworkView: View {
                     Text(tunnel.status.title)
                 }
             }
-            TableColumn("공개 URL") { tunnel in
+            TableColumn(L.str("network.tunnel.table.url")) { tunnel in
                 if let domain = tunnel.publicDomain {
                     HStack(spacing: 6) {
                         Text(domain)
@@ -259,35 +384,46 @@ struct NetworkView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            TableColumn("제어") { tunnel in
+            TableColumn(L.str("network.tunnel.table.control")) { tunnel in
                 controls(for: tunnel)
             }
         }
-        .frame(minHeight: 120)
+        .frame(minHeight: 120, maxHeight: .infinity)
     }
 
     private func controls(for tunnel: ManagedTunnel) -> some View {
         HStack {
+            Button {
+                logTunnelID = TunnelLogSelection(tunnelID: tunnel.id)
+            } label: {
+                Image(systemName: "terminal")
+            }
+            .help(L.str("network.tunnel.control.log"))
             switch tunnel.status {
-            case .stopped, .error:
-                Button("시작") {
-                    tunnels.startTunnel(tunnel.id)
-                }
             case .running:
-                Button("정지") {
+                Button {
                     tunnels.stopTunnel(tunnel.id)
+                } label: {
+                    Image(systemName: "stop.circle")
                 }
+                .help(L.str("network.tunnel.control.stop"))
             case .starting, .stopping:
                 ProgressView()
                     .controlSize(.small)
             default:
-                Button("시작") {
+                Button {
                     tunnels.startTunnel(tunnel.id)
+                } label: {
+                    Image(systemName: "play.circle")
                 }
+                .help(L.str("network.tunnel.control.start"))
             }
-            Button("삭제", role: .destructive) {
+            Button {
                 try? tunnels.deleteTunnel(tunnel.id)
+            } label: {
+                Image(systemName: "trash")
             }
+            .help(L.str("network.tunnel.control.delete"))
         }
     }
 
@@ -316,5 +452,65 @@ private extension NetworkView {
     func openInBrowser(_ urlString: String) {
         guard let url = URL(string: urlString) else { return }
         NSWorkspace.shared.open(url)
+    }
+}
+
+/// 터널 cloudflared 로그 시트. 표시 중 0.7초마다 로그를 갱신한다.
+struct TunnelLogSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let tunnels: TunnelManager
+    let id: UUID
+    @State private var text = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(L.str("network.tunnel.log.title"))
+                    .font(.headline)
+                Spacer()
+                Button {
+                    copyToPasteboard(text)
+                } label: {
+                    Label(L.str("network.tunnel.log.copy"), systemImage: "doc.on.doc")
+                }
+                Button(L.str("network.tunnel.log.close")) {
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+            }
+
+            ScrollView {
+                Text(text.isEmpty ? L.str("network.tunnel.log.empty") : text)
+                    .font(.system(.caption, design: .monospaced))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+            .frame(width: 560, height: 360)
+            .background(Color.black.opacity(0.85), in: RoundedRectangle(cornerRadius: 8))
+            .foregroundStyle(.white)
+            .overlay(alignment: .bottomTrailing) {
+                if text.isEmpty {
+                    Text(L.str("network.tunnel.log.auto"))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .padding(6)
+                }
+            }
+        }
+        .padding(16)
+        .onAppear {
+            text = tunnels.logText(for: id)
+        }
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(700))
+                text = tunnels.logText(for: id)
+            }
+        }
+    }
+
+    private func copyToPasteboard(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 }

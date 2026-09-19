@@ -17,9 +17,9 @@ struct HostsPreviewView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if text.isEmpty {
                 ContentUnavailableView(
-                    "내용 없음",
+                    L.str("content.noHosts.title"),
                     systemImage: "doc.text",
-                    description: Text("아직 반영된 내용이 없습니다.")
+                    description: Text(L.str("content.noHosts.description"))
                 )
             } else {
                 HostsLineList(text: text, minHeight: 0)
@@ -33,16 +33,16 @@ struct HostsPreviewView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Label("반영 내용", systemImage: "doc.text.magnifyingglass")
+                Label(L.str("content.previewLabel"), systemImage: "doc.text.magnifyingglass")
                     .font(.title2.bold())
                 Spacer()
                 if let active = model.activeProfile {
                     if model.needsReapply(active) {
-                        Label("적용 필요", systemImage: "exclamationmark.triangle")
+                        Label(L.str("menu.needsReapply"), systemImage: "exclamationmark.triangle")
                             .font(.caption)
                             .foregroundStyle(.orange)
                     } else {
-                        Label("적용됨", systemImage: "checkmark.circle")
+                        Label(L.str("menu.applied"), systemImage: "checkmark.circle")
                             .font(.caption)
                             .foregroundStyle(.green)
                     }
@@ -50,15 +50,15 @@ struct HostsPreviewView: View {
                 Button {
                     reload()
                 } label: {
-                    Label("새로고침", systemImage: "arrow.clockwise")
+                    Label(L.str("menu.refresh"), systemImage: "arrow.clockwise")
                 }
             }
             HStack(spacing: 6) {
-                Text(isLive ? "/etc/hosts 실제 파일" : "미리보기 (파일 읽기 실패 폴백)")
+                Text(isLive ? L.str("menu.hosts.titleLive") : L.str("menu.hosts.titlePreview"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if let active = model.activeProfile {
-                    Text("· 활성: \(active.name)")
+                    Text(L.str("sidebar.activeProfile", active.name))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -71,8 +71,4 @@ struct HostsPreviewView: View {
         isLive = model.lastHostsIsLive
         loadedOnce = true
     }
-}
-
-public extension Notification.Name {
-    static let hostsApplied = Notification.Name("etchost.hostsApplied")
 }

@@ -41,17 +41,17 @@ public enum TunnelStatus: Equatable, Hashable, Sendable, Codable {
 
     public var title: String {
         switch self {
-        case .stopped: return "정지"
-        case .starting: return "시작 중"
-        case .running: return "실행 중"
-        case .stopping: return "정지 중"
-        case .error(let msg): return "오류: \(msg)"
+        case .stopped: return Loc.str("tunnel.status.stopped")
+        case .starting: return Loc.str("tunnel.status.starting")
+        case .running: return Loc.str("tunnel.status.running")
+        case .stopping: return Loc.str("tunnel.status.stopping")
+        case .error(let msg): return Loc.str("tunnel.status.error", msg)
         }
     }
 }
 
 /// 스캔 결과 행. ip:port 단위.
-public struct PortScanResult: Identifiable, Equatable, Hashable, Sendable {
+public struct PortScanResult: Identifiable, Codable, Equatable, Hashable, Sendable {
     public let id: UUID
     public let ip: String
     public let port: Int
