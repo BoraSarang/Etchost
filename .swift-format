@@ -1,0 +1,10 @@
+{
+  "indentation": 4,
+  "allman": false,
+  "indentCase": true,
+  "spaceAroundOperators": true,
+  "maximumLineLength": 120,
+  "importGrouping": true,
+  "selfRequired": false,
+  "voidReturnType": true
+}
