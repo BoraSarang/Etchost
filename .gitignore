@@ -33,3 +33,6 @@ coverage/
 
 # Logs
 *.log
+
+# Local agent session notes
+.agent/
