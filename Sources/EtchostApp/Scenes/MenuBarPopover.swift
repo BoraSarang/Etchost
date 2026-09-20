@@ -5,12 +5,13 @@ import SwiftUI
 /// 메뉴바 팝오버: 상태카드 + 프로필 빠른 전환 + 터널 + 현재 적용된 호스트 표.
 struct MenuBarPopover: View {
     @EnvironmentObject var model: AppModel
+    @Environment(AppSettings.self) private var settings
     @ObservedObject private var tunnels: TunnelManager
     @State private var tableRows: [HostsTableRow] = []
     @State private var isLive = true
     @State private var hoveredDomain: String?
     @State private var dismissWorkItem: DispatchWorkItem?
-    private let buildTag = "v0.6.0"
+    private let buildTag = "v0.6.1"
 
     init() {
         _tunnels = ObservedObject(wrappedValue: TunnelManager.shared)
@@ -34,6 +35,9 @@ struct MenuBarPopover: View {
         .onAppear {
             reload()
             logMenuState()
+            Task {
+                await settings.maybeAutoCheckForUpdate()
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .hostsApplied)) { _ in reload() }
     }
@@ -326,22 +330,44 @@ struct MenuBarPopover: View {
         HStack(spacing: 12) {
             Button(L.str("menu.openMain")) {
                 NotificationCenter.default.post(name: .openMainWindow, object: nil)
+                MainWindowOpener.shared.openMain()
                 NSApp.activate(ignoringOtherApps: true)
             }
             Spacer()
+            versionOrUpdateView
             SettingsLink {
                 Text(L.str("menu.settings"))
             }
             Button(L.str("menu.quit")) {
                 NSApplication.shared.terminate(nil)
             }
+        }
+    }
+
+    // MARK: - 헬퍼
+
+    /// 하단 버전 표시. 새 버전이 있으면 주황색 표시 + 클릭 시 업데이트 창.
+    @ViewBuilder
+    private var versionOrUpdateView: some View {
+        if let update = settings.availableUpdate {
+            Button {
+                NotificationCenter.default.post(name: .showUpdateSheet, object: nil)
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.down.circle.fill")
+                    Text(L.str("menu.updateAvailable", update.tag))
+                }
+                .font(.caption)
+                .foregroundStyle(.orange)
+            }
+            .buttonStyle(.plain)
+            .help(L.str("settings.update.details"))
+        } else {
             Text("Etchost \(buildTag)")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         }
     }
-
-    // MARK: - 헬퍼
 
     private var runningTunnelCount: Int {
         tunnels.tunnels.filter { $0.status.isActive }.count

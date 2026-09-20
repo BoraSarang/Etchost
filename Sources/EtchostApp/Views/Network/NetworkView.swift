@@ -71,16 +71,25 @@ struct NetworkView: View {
                     .font(.callout)
                 Spacer()
             } else {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-                Text(L.str("network.cloudflare.missing"))
-                    .font(.callout)
-                Spacer()
-                Button(L.str("network.cloudflare.install")) {
-                    Task { try? await tunnels.installCloudflared() }
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        Text(L.str("network.cloudflare.missing"))
+                            .font(.callout)
+                        Spacer()
+                        Button(L.str("network.cloudflare.install")) {
+                            Task { try? await tunnels.installCloudflared() }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    }
+                    if let message = tunnels.installMessage {
+                        Label(message, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
             }
         }
     }

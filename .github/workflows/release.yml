@@ -1,0 +1,73 @@
+name: Release
+
+# 태그 푸시(v1.2.3 형태)하면 Release 빌드 → Zip → GitHub Release 자동 발행.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Verify tag matches bundle version
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          EXPECTED="${TAG#v}"
+          ACTUAL="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' Sources/EtchostApp/Resources/Info.plist)"
+          echo "tag=$EXPECTED bundle=$ACTUAL"
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "태그($TAG)와 Info.plist($ACTUAL)가 다릅니다. 버전을 맞추고 다시 태그하세요."
+            exit 1
+          fi
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Run tests
+        run: swift test
+
+      - name: Generate project and build Release
+        run: |
+          xcodegen
+          xcodebuild build \
+            -project Etchost.xcodeproj \
+            -scheme Etchost \
+            -destination 'platform=macOS' \
+            -configuration Release \
+            -derivedDataPath build
+
+      - name: Ad-hoc sign and zip
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          APP_PATH="$(find build -name 'Etchost.app' -type d | head -1)"
+          if [ -z "$APP_PATH" ]; then
+            echo "Etchost.app을 찾지 못했습니다."
+            exit 1
+          fi
+          # Developer ID 없이 배포하는 ad-hoc 서명 (첫 실행은 우클릭 → 열기 필요).
+          codesign --force --deep --sign - "$APP_PATH"
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "Etchost-${TAG}.zip"
+          ls -lh "Etchost-${TAG}.zip"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          ASSET="Etchost-${TAG}.zip"
+          NOTES_FILE="release-notes/${TAG}.md"
+          if [ -f "$NOTES_FILE" ]; then
+            gh release create "$TAG" --title "Etchost $TAG" --notes-file "$NOTES_FILE" "$ASSET"
+          else
+            gh release create "$TAG" --title "Etchost $TAG" --generate-notes "$ASSET"
+          fi

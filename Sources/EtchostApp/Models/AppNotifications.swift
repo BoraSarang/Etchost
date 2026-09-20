@@ -4,4 +4,5 @@ import Foundation
 public extension Notification.Name {
     static let openMainWindow = Notification.Name("etchost.openMainWindow")
     static let hostsApplied = Notification.Name("etchost.hostsApplied")
+    static let showUpdateSheet = Notification.Name("etchost.showUpdateSheet")
 }

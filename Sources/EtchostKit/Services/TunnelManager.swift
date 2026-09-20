@@ -139,9 +139,11 @@ public final class TunnelManager: ObservableObject {
 
         let brewCandidates = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew", "/usr/bin/env"]
         guard let brew = brewCandidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
+            installMessage = Loc.str("error.brewNotInstalled")
             throw EtchostError.brewNotInstalled
         }
 
+        installMessage = nil
         isInstalling = true
         installMessage = Loc.str("tunnel.install.installing")
         defer { isInstalling = false }

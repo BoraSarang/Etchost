@@ -12,8 +12,11 @@ struct EtchostApp: App {
                 .environmentObject(AppModel.shared)
                 .environment(AppSettings.shared)
                 .frame(minWidth: 760, minHeight: 480)
+                .onAppear {
+                    MainWindowOpener.shared.register { id in openWindow(id: id) }
+                }
                 .onReceive(NotificationCenter.default.publisher(for: .openMainWindow)) { _ in
-                    openWindow(id: "main")
+                    MainWindowOpener.shared.openMain()
                 }
         }
         .defaultSize(width: 920, height: 600)
@@ -26,7 +29,7 @@ struct EtchostApp: App {
     }
 }
 
-/// 메인 창 제외 상태 아이템 및 팝오버를 소유. LSUIElement 앱 수명 유지.
+/// 호스트 관리 창 + 상태 아이템 및 팝오버를 소유. LSUIElement 앱 수명 유지.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusController: StatusItemController?
@@ -34,6 +37,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppSettings.shared.applyOnLaunch()
         statusController = StatusItemController(model: AppModel.shared)
+        BackupManager.shared.pruneOldBackups()
+        Task {
+            await AppSettings.shared.maybeAutoCheckForUpdate()
+        }
+        if !AppSettings.shared.openHostManagerAtLaunch {
+            DispatchQueue.main.async {
+                NSApp.windows.first(where: { $0.identifier?.rawValue == "main" })?.close()
+            }
+        }
+    }
+
+    /// 마지막 창을 닫아도 메뉴바 상주를 위해 종료하지 않는다.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
+    /// Dock 표시 상태에서 Dock 클릭 시 호스트 관리 창을 열거나 맨 앞으로 가져온다.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag {
+            MainWindowOpener.shared.openMain()
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        if let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "main" }) {
+            if window.isMiniaturized {
+                window.deminiaturize(nil)
+            }
+            window.makeKeyAndOrderFront(nil)
+        }
+        return true
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -48,6 +80,7 @@ struct SettingsView: View {
     private let retentionOptions = [10, 20, 50, 100]
     private static let defaultPortCount = NetworkScanner.commonPorts.count
     @State private var languageChanged = false
+    @State private var showUpdateSheet = false
 
     var body: some View {
         Form {
@@ -60,6 +93,16 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .navigationTitle(L.str("settings.title"))
         .frame(width: 470, height: 660)
+        .sheet(isPresented: $showUpdateSheet) {
+            if let update = settings.availableUpdate {
+                UpdateAvailableSheet(
+                    tag: update.tag,
+                    htmlURL: update.htmlURL,
+                    notes: update.notes,
+                    currentVersion: settings.appBundleVersion
+                )
+            }
+        }
     }
 
     // MARK: - 일반
@@ -117,6 +160,14 @@ struct SettingsView: View {
             Text(L.str("settings.showDockIcon.description"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+            Toggle(
+                L.str("settings.openHostManagerAtLaunch"),
+                isOn: Binding(
+                    get: { settings.openHostManagerAtLaunch },
+                    set: { settings.setOpenHostManagerAtLaunch($0) }
+                )
+            )
         }
     }
 
@@ -257,6 +308,17 @@ struct SettingsView: View {
             }
 
             updateCheckRow
+            Picker(
+                L.str("settings.update.frequency"),
+                selection: Binding(
+                    get: { settings.updateCheckFrequency },
+                    set: { settings.setUpdateCheckFrequency($0) }
+                )
+            ) {
+                ForEach(AppSettings.UpdateCheckFrequency.allCases) { frequency in
+                    Text(frequency.title).tag(frequency)
+                }
+            }
         } header: {
             Text(L.str("settings.section.about"))
         }
@@ -270,7 +332,12 @@ struct SettingsView: View {
                 Label(L.str("settings.update.check"), systemImage: "arrow.triangle.2.circlepath")
                 Spacer()
                 Button(L.str("settings.update.button")) {
-                    Task { await settings.checkForUpdate() }
+                    Task {
+                        await settings.checkForUpdate()
+                        if settings.availableUpdate != nil {
+                            showUpdateSheet = true
+                        }
+                    }
                 }
                 .controlSize(.small)
             }
@@ -289,16 +356,25 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.green)
             }
-        case let .updateAvailable(tag, htmlURL):
+        case let .updateAvailable(tag, htmlURL, _):
             HStack(spacing: 8) {
                 Label(L.str("settings.update.check"), systemImage: "arrow.down.circle.fill")
                 Spacer()
-                Text(L.str("settings.update.available", tag))
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                if let url = URL(string: htmlURL) {
-                    Link(L.str("settings.update.download"), destination: url)
-                        .controlSize(.small)
+                Button {
+                    showUpdateSheet = true
+                } label: {
+                    Text(L.str("settings.update.available", tag))
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    Text(L.str("settings.update.details"))
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                if URL(string: htmlURL) != nil {
+                    Button(L.str("settings.update.download")) {
+                        showUpdateSheet = true
+                    }
+                    .controlSize(.small)
                 }
             }
         case .unavailable(let message):
@@ -309,7 +385,12 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Button(L.str("settings.update.retry")) {
-                    Task { await settings.checkForUpdate() }
+                    Task {
+                        await settings.checkForUpdate()
+                        if settings.availableUpdate != nil {
+                            showUpdateSheet = true
+                        }
+                    }
                 }
                 .controlSize(.small)
             }

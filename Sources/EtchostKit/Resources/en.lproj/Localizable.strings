@@ -16,6 +16,7 @@
 "error.fragmentNotFound" = "Fragment not found.";
 "error.invalidHostEntry" = "Invalid hosts entry: %@";
 "error.ioError" = "File I/O error: %@";
+"error.noPublishedRelease" = "No published releases yet.";
 "error.permissionDenied" = "Administrator privileges are required. Check your password.";
 "error.profileNotFound" = "Profile not found.";
 "error.releaseFetchFailed" = "Could not fetch release information.";

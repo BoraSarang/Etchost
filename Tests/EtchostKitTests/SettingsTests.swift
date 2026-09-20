@@ -89,4 +89,20 @@ struct BackupRetentionTests {
         }
         #expect(manager.listBackups().count == 3)
     }
+
+    @Test("파일명에 콜론 없음 (Finder에서 슬래시로 보임)")
+    func fileNameHasNoColon() {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("EtchostTests-filename-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let manager = BackupManager(backupDir: dir)
+
+        #expect(manager.backupCurrentHosts() != nil)
+        let names = manager.listBackups().map(\.lastPathComponent)
+        #expect(names.count == 1)
+        #expect(!names[0].contains(":"))
+        #expect(!names[0].contains("/"))
+        #expect(names[0].hasPrefix("hosts-"))
+        #expect(names[0].hasSuffix(".backup"))
+    }
 }

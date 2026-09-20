@@ -25,10 +25,15 @@ public final class BackupManager: @unchecked Sendable {
     }
 
     /// 현재 /etc/hosts를 타임스탬프 백업으로 저장.
+    /// 파일명: hosts-2026-09-20_153022-a1b2c3.backup (로컬 시간, Finder에서 콜론이 슬래시로 보이는 문제 회피).
     @discardableResult
     public func backupCurrentHosts() -> URL? {
         guard let content = try? String(contentsOfFile: hostsPath, encoding: .utf8) else { return nil }
-        let name = "hosts-\(Date().ISO8601Format())-\(UUID().uuidString.lowercased().prefix(6)).backup"
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd_HHmmss"
+        let stamp = formatter.string(from: Date())
+        let name = "hosts-\(stamp)-\(UUID().uuidString.lowercased().prefix(6)).backup"
         let url = backupDir.appendingPathComponent(name)
         do {
             try content.write(to: url, atomically: true, encoding: .utf8)
@@ -39,21 +44,29 @@ public final class BackupManager: @unchecked Sendable {
         }
     }
 
+    /// .backup 파일만 최신순으로 반환. 파일명 내림차순(시간순과 일치)이 기준이라
+    /// 복사·복원으로 파일 생성일이 바뀌어도 순서가 깨지지 않는다.
     public func listBackups() -> [URL] {
         do {
             let urls = try FileManager.default.contentsOfDirectory(
                 at: backupDir, includingPropertiesForKeys: [.creationDateKey], options: .skipsHiddenFiles)
-            return urls.sorted { lhs, rhs in
-                let ld = (try? lhs.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date.distantPast
-                let rd = (try? rhs.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date.distantPast
-                return ld > rd
-            }
+            return urls
+                .filter { $0.pathExtension == "backup" }
+                .sorted { lhs, rhs in
+                    if lhs.lastPathComponent != rhs.lastPathComponent {
+                        return lhs.lastPathComponent > rhs.lastPathComponent
+                    }
+                    let ld = (try? lhs.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date.distantPast
+                    let rd = (try? rhs.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date.distantPast
+                    return ld > rd
+                }
         } catch {
             return []
         }
     }
 
-    private func pruneOldBackups() {
+    /// 보존 개수 초과분을 삭제. 앱 실행 시에도 호출되어 예전 초과분이 쌓이지 않게 한다.
+    public func pruneOldBackups() {
         for backup in listBackups().dropFirst(backupRetentionLimit()) {
             try? FileManager.default.removeItem(at: backup)
         }

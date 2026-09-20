@@ -6,6 +6,9 @@ public enum SettingsKeys {
     public static let autoStartTunnelsAtLaunch = "settings.autoStartTunnelsAtLaunch"
     public static let autoRebookTunnels = "settings.autoRebookTunnels"
     public static let customScanPorts = "settings.customScanPorts"
+    public static let openHostManagerAtLaunch = "settings.openHostManagerAtLaunch"
+    public static let updateCheckFrequency = "settings.updateCheckFrequency"
+    public static let updateLastChecked = "settings.updateLastChecked"
     public static let backupRetention = "settings.backupRetention"
     public static let language = "settings.language"
 

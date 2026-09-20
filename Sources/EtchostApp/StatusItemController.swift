@@ -8,12 +8,19 @@ final class StatusItemController: NSObject {
     private let model: AppModel
     private var statusItem: NSStatusItem!
     private let popover = NSPopover()
+    private var updateWindow: NSWindow?
 
     init(model: AppModel) {
         self.model = model
         super.init()
         setupStatusItem()
         setupPopover()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleShowUpdateSheet),
+            name: .showUpdateSheet,
+            object: nil
+        )
     }
 
     private func setupStatusItem() {
@@ -35,12 +42,42 @@ final class StatusItemController: NSObject {
     private func setupPopover() {
         popover.behavior = .transient
         let hosting = NSHostingController(
-            rootView: MenuBarPopover().environmentObject(model)
+            rootView: MenuBarPopover()
+                .environmentObject(model)
+                .environment(AppSettings.shared)
         )
         // 콘텐츠 크기에 맞춰 자동 조절 (프로필/터널/호스트 수가 늘어나도 잘리지 않음).
         hosting.sizingOptions = [.preferredContentSize]
         popover.contentViewController = hosting
         popover.animates = true
+    }
+
+    /// 팝오버 하단 업데이트 표시에서 요청: 별도 윈도우로 업데이트 시트를 연다.
+    /// 설정 시트와 달리 dismiss가 없으므로 onClose로 윈도우를 직접 닫는다.
+    @objc private func handleShowUpdateSheet() {
+        guard let update = AppSettings.shared.availableUpdate else { return }
+        let sheet = UpdateAvailableSheet(
+            tag: update.tag,
+            htmlURL: update.htmlURL,
+            notes: update.notes,
+            currentVersion: AppSettings.shared.appBundleVersion,
+            onClose: { [weak self] in self?.updateWindow?.close() }
+        )
+        if let window = updateWindow,
+           let hosting = window.contentViewController as? NSHostingController<UpdateAvailableSheet> {
+            hosting.rootView = sheet
+            window.makeKeyAndOrderFront(nil)
+        } else {
+            let hosting = NSHostingController(rootView: sheet)
+            let window = NSWindow(contentViewController: hosting)
+            window.title = "Etchost"
+            window.styleMask = [.titled, .closable]
+            window.center()
+            window.isReleasedWhenClosed = false
+            updateWindow = window
+            window.makeKeyAndOrderFront(nil)
+        }
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     @objc private func togglePopover(_ sender: Any?) {

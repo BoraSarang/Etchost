@@ -4,10 +4,21 @@ import Foundation
 public struct GitHubRelease: Codable, Sendable, Equatable {
     public let tagName: String
     public let htmlURL: String
+    public let name: String?
+    public let body: String?
+
+    public init(tagName: String, htmlURL: String, name: String? = nil, body: String? = nil) {
+        self.tagName = tagName
+        self.htmlURL = htmlURL
+        self.name = name
+        self.body = body
+    }
 
     enum CodingKeys: String, CodingKey {
         case tagName = "tag_name"
         case htmlURL = "html_url"
+        case name
+        case body
     }
 }
 
@@ -33,11 +44,18 @@ public enum ReleaseChecker {
             throw EtchostError.scanFailed(Loc.str("error.releaseURLFailed"))
         }
         var request = URLRequest(url: url)
-        request.setValue("Etchost/0.6.0", forHTTPHeaderField: "User-Agent")
+        let version = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "0.0.0"
+        request.setValue("Etchost/\(version)", forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 10
 
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+        guard let http = response as? HTTPURLResponse else {
+            throw EtchostError.scanFailed(Loc.str("error.releaseFetchFailed"))
+        }
+        if http.statusCode == 404 {
+            throw EtchostError.noPublishedRelease
+        }
+        guard (200...299).contains(http.statusCode) else {
             throw EtchostError.scanFailed(Loc.str("error.releaseFetchFailed"))
         }
         return try JSONDecoder().decode(GitHubRelease.self, from: data)

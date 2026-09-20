@@ -15,6 +15,9 @@ public final class AppSettings {
     /// Dock 아이콘 표시 여부. ULSIElement(메뉴바 전용) 앱이지만 런타임 정책만 전환한다.
     public private(set) var showDockIcon = false
 
+    /// 앱 실행 시 호스트 관리 창 열기. 기본 OFF (메뉴바로만 시작).
+    public private(set) var openHostManagerAtLaunch = false
+
     public private(set) var autoStartTunnelsAtLaunch = false
     public private(set) var autoRebookTunnels = false
     public private(set) var customScanPortsInput = ""
@@ -35,12 +38,34 @@ public final class AppSettings {
         case idle
         case checking
         case upToDate
-        case updateAvailable(tag: String, htmlURL: String)
+        case updateAvailable(tag: String, htmlURL: String, notes: String)
         case unavailable(String)
+    }
+
+    /// 업데이트 자동 확인 주기. 기본값은 주 1회.
+    public enum UpdateCheckFrequency: String, CaseIterable, Identifiable, Sendable {
+        case atLaunch
+        case daily
+        case weekly
+        case never
+
+        public var id: String { rawValue }
+
+        public var title: String {
+            switch self {
+            case .atLaunch: return L.str("settings.update.frequency.atLaunch")
+            case .daily: return L.str("settings.update.frequency.daily")
+            case .weekly: return L.str("settings.update.frequency.weekly")
+            case .never: return L.str("settings.update.frequency.never")
+            }
+        }
     }
 
     public private(set) var updateState: UpdateState = .idle
     public private(set) var updateCheckedAt: Date?
+    public private(set) var updateCheckFrequency: UpdateCheckFrequency = .weekly
+
+    private let launchDate = Date()
 
     /// 실행 중인 앱 버전 (CFBundle). 읽기 실패 시 "0.0.0".
     public var appVersion: String {
@@ -58,6 +83,7 @@ public final class AppSettings {
     private init() {
         let defaults = UserDefaults.standard
         showDockIcon = defaults.bool(forKey: SettingsKeys.showDockIcon)
+        openHostManagerAtLaunch = defaults.bool(forKey: SettingsKeys.openHostManagerAtLaunch)
         autoStartTunnelsAtLaunch = defaults.bool(forKey: SettingsKeys.autoStartTunnelsAtLaunch)
         autoRebookTunnels = defaults.bool(forKey: SettingsKeys.autoRebookTunnels)
         customScanPortsInput = defaults.string(forKey: SettingsKeys.customScanPorts) ?? ""
@@ -67,6 +93,11 @@ public final class AppSettings {
             : SettingsKeys.backupRetentionDefault
         language = AppLanguage(rawValue: defaults.string(forKey: SettingsKeys.language) ?? "") ?? .system
         appliedLanguage = Self.currentAppliedLanguage()
+        updateCheckFrequency = UpdateCheckFrequency(rawValue: defaults.string(forKey: SettingsKeys.updateCheckFrequency) ?? "") ?? .weekly
+        let lastChecked = defaults.double(forKey: SettingsKeys.updateLastChecked)
+        if lastChecked > 0 {
+            updateCheckedAt = Date(timeIntervalSince1970: lastChecked)
+        }
     }
 
     // MARK: - Dock 아이콘
@@ -82,6 +113,14 @@ public final class AppSettings {
         if showDockIcon {
             NSApp.setActivationPolicy(.regular)
         }
+    }
+
+    // MARK: - 호스트 관리 창 자동 열기
+
+    public func setOpenHostManagerAtLaunch(_ on: Bool) {
+        guard openHostManagerAtLaunch != on else { return }
+        openHostManagerAtLaunch = on
+        UserDefaults.standard.set(on, forKey: SettingsKeys.openHostManagerAtLaunch)
     }
 
     // MARK: - 로그인 시 자동 실행 (정석: SMAppService.mainApp)
@@ -189,14 +228,66 @@ public final class AppSettings {
         do {
             let release = try await ReleaseChecker.fetchLatest()
             updateCheckedAt = Date()
+            persistLastChecked()
             if ReleaseChecker.isNewer(release.tagName, than: appVersion) {
-                updateState = .updateAvailable(tag: release.tagName, htmlURL: release.htmlURL)
+                updateState = .updateAvailable(tag: release.tagName, htmlURL: release.htmlURL, notes: release.body ?? "")
             } else {
                 updateState = .upToDate
             }
         } catch {
             updateCheckedAt = Date()
-            updateState = .unavailable(L.str("settings.update.unavailable"))
+            persistLastChecked()
+            if let etchostError = error as? EtchostError, etchostError == .noPublishedRelease {
+                updateState = .unavailable(L.str("settings.update.noReleases"))
+            } else {
+                updateState = .unavailable(L.str("settings.update.unavailable"))
+            }
         }
+    }
+
+    public func setUpdateCheckFrequency(_ value: UpdateCheckFrequency) {
+        guard updateCheckFrequency != value else { return }
+        updateCheckFrequency = value
+        UserDefaults.standard.set(value.rawValue, forKey: SettingsKeys.updateCheckFrequency)
+    }
+
+    /// 주기에 따라 자동 확인이 필요하면 확인한다. 앱 실행 시와 메뉴바 팝오버 열 때 호출.
+    public func maybeAutoCheckForUpdate() async {
+        guard updateCheckFrequency != .never else { return }
+        if case .checking = updateState { return }
+        let now = Date()
+        let due: Bool
+        switch updateCheckFrequency {
+        case .never:
+            due = false
+        case .atLaunch:
+            due = updateCheckedAt.map { $0 < launchDate } ?? true
+        case .daily:
+            due = updateCheckedAt.map { now.timeIntervalSince($0) >= 86_400 } ?? true
+        case .weekly:
+            due = updateCheckedAt.map { now.timeIntervalSince($0) >= 604_800 } ?? true
+        }
+        guard due else { return }
+        await checkForUpdate()
+    }
+
+    private func persistLastChecked() {
+        if let checkedAt = updateCheckedAt {
+            UserDefaults.standard.set(checkedAt.timeIntervalSince1970, forKey: SettingsKeys.updateLastChecked)
+        }
+    }
+
+    /// 업데이트 시트에 표시할 최신 릴리스 정보 (버전·링크·노트).
+    public struct AvailableUpdate: Equatable, Sendable {
+        public let tag: String
+        public let htmlURL: String
+        public let notes: String
+    }
+
+    public var availableUpdate: AvailableUpdate? {
+        if case let .updateAvailable(tag, htmlURL, notes) = updateState {
+            return AvailableUpdate(tag: tag, htmlURL: htmlURL, notes: notes)
+        }
+        return nil
     }
 }
