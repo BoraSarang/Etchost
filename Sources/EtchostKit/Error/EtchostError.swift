@@ -18,6 +18,7 @@ public enum EtchostError: Error, LocalizedError, Sendable, Equatable {
     case brewNotInstalled
     case scanFailed(String)
     case noPublishedRelease
+    case remoteSyncFailed(String)
     case unknown(String)
 
     public var code: String {
@@ -39,6 +40,7 @@ public enum EtchostError: Error, LocalizedError, Sendable, Equatable {
         case .brewNotInstalled: return "E-MAC-HOSTS-9003"
         case .scanFailed: return "E-MAC-HOSTS-9004"
         case .noPublishedRelease: return "E-MAC-HOSTS-9005"
+        case .remoteSyncFailed: return "E-MAC-HOSTS-9006"
         case .unknown: return "E-MAC-HOSTS-9999"
         }
     }
@@ -57,6 +59,7 @@ public enum EtchostError: Error, LocalizedError, Sendable, Equatable {
         case .brewNotInstalled: return Loc.str("error.brewNotInstalled")
         case .scanFailed(let msg): return Loc.str("error.scanFailed", msg)
         case .noPublishedRelease: return Loc.str("error.noPublishedRelease")
+        case .remoteSyncFailed(let msg): return Loc.str("error.remoteSyncFailed", msg)
         case .permissionDenied: return Loc.str("error.permissionDenied")
         case .applyFailed(let msg): return Loc.str("error.applyFailed", msg)
         case .dnsFlushFailed(let msg): return Loc.str("error.dnsFlushFailed", msg)

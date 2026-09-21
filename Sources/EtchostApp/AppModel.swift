@@ -15,9 +15,20 @@ public final class AppModel: ObservableObject {
     public var sidebarSection: SidebarSection = .profiles
     public var selectedProfileID: UUID?
     public var selectedFragmentID: UUID?
+    /// 에디터 미저장 변경 여부 (프로필/프래그먼트 에디터가 보고).
+    public var editorDirty = false
+    /// 탭 이동 보류분 (미저장 경고에서 이동 확정 시 사용).
+    public var pendingSection: SidebarSection?
+    public var showUnsavedAlert = false
+    /// 에디터 저장 요청 (탭가드 저장 후 이동용). true=깨끗해짐/저장됨.
+    public var requestEditorSave: (() -> Bool)?
+    public var saveRequestToken = UUID()
     public var isApplying = false
     public var applyError: String?
     public var lastBackupURL: URL?
+    /// 현재 동기화 중인 원격 프래그먼트 ID + 진행 단계 (nil이면 유휴).
+    public var syncingFragmentID: UUID?
+    public var syncPhase: SyncProgress?
     /// 네트워크 허브(포트 스캔 + cloudflared 터널) 공유 인스턴스.
     public let tunnelManager = TunnelManager.shared
 
@@ -117,6 +128,27 @@ public final class AppModel: ObservableObject {
     /// 편집을 스토어 원본으로 되돌림 (= 메모리 목록 새로고침).
     public func cancelEdit(_ id: UUID) {
         refresh()
+    }
+
+    /// 탭 이동 요청. 미저장 변경이 있으면 경고 후 보류, 없으면 즉시 이동.
+    public func requestTabSwitch(to section: SidebarSection) {
+        guard section != sidebarSection else { return }
+        guard editorDirty else {
+            sidebarSection = section
+            return
+        }
+        pendingSection = section
+        showUnsavedAlert = true
+    }
+
+    /// 보류 탭으로 이동 확정 (버리기 / 저장 후 이동 공용).
+    public func confirmPendingTabSwitch() {
+        if let next = pendingSection {
+            sidebarSection = next
+        }
+        pendingSection = nil
+        showUnsavedAlert = false
+        editorDirty = false
     }
 
     public func describe(_ error: Error) -> String {

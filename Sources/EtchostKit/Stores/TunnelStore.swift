@@ -36,13 +36,39 @@ public final class TunnelStore: @unchecked Sendable {
                 guard let decoded = try? JSONDecoder().decode([Tunnel].self, from: data) else {
                     throw EtchostError.ioError("tunnels.json decode failed")
                 }
-                tunnels = Dictionary(uniqueKeysWithValues: decoded.map { ($0.id, $0) })
+                var migrated = false
+                tunnels = Dictionary(uniqueKeysWithValues: decoded.map { item in
+                    var next = item
+                    let fixed = Self.migrateLabel(next.label)
+                    if fixed != next.label {
+                        next.label = fixed
+                        next.updatedAt = Date()
+                        migrated = true
+                    }
+                    return (next.id, next)
+                })
+                if migrated { saveLocked() }
             } catch {
                 let corruptURL = fileURL.appendingPathExtension("corrupt-\(Int(Date().timeIntervalSince1970))")
                 try? FileManager.default.moveItem(at: fileURL, to: corruptURL)
                 tunnels = [:]
             }
         }
+    }
+
+    /// 구버전 로케일 그룹핑(`:3,003`)으로 저장된 라벨의 포트 콤마 제거. 1회성 마이그레이션.
+    static func migrateLabel(_ label: String) -> String {
+        guard label.contains(","),
+              let regex = try? NSRegularExpression(pattern: ":(\\d{1,3}(?:,\\d{3})+)")
+        else { return label }
+        var fixed = label
+        let matches = regex.matches(in: fixed, range: NSRange(fixed.startIndex..., in: fixed))
+        for match in matches.reversed() where match.numberOfRanges > 1 {
+            if let range = Range(match.range(at: 1), in: fixed) {
+                fixed.replaceSubrange(range, with: fixed[range].replacingOccurrences(of: ",", with: ""))
+            }
+        }
+        return fixed
     }
 
     private func saveLocked() {

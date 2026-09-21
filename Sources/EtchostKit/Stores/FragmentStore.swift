@@ -108,6 +108,28 @@ public final class FragmentStore: @unchecked Sendable {
         }
     }
 
+    /// 원격 동기화 성공 반영: 항목 교체 + 동기화 시각 기록.
+    public func applySyncResult(_ id: UUID, entries: [HostEntry], at date: Date = Date()) throws {
+        try queue.sync(flags: .barrier) {
+            guard var fragment = fragments[id] else {
+                throw EtchostError.fragmentNotFound(id)
+            }
+            fragment.applySync(entries: entries, at: date)
+            fragments[id] = fragment
+            saveLocked()
+        }
+    }
+
+    /// 원격 동기화 실패 기록: 캐시는 유지하고 오류 메시지만 남긴다.
+    public func recordSyncError(_ id: UUID, message: String) {
+        queue.sync(flags: .barrier) {
+            guard var fragment = fragments[id] else { return }
+            fragment.recordSyncError(message)
+            fragments[id] = fragment
+            saveLocked()
+        }
+    }
+
     public func reorder(_ ids: [UUID]) {
         queue.sync(flags: .barrier) {
             for (index, id) in ids.enumerated() {
