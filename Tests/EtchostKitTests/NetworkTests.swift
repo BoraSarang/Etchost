@@ -1,4 +1,4 @@
-import EtchostKit
+@testable import EtchostKit
 import Foundation
 import Testing
 
@@ -107,5 +107,60 @@ struct TunnelModelTests {
         #expect(TunnelStatus.error("x").title == Loc.str("tunnel.status.error", "x"))
         #expect(TunnelStatus.running.isActive == true)
         #expect(TunnelStatus.stopped.isActive == false)
+    }
+}
+
+@Suite("NetworkScanner 실측 판정·서브넷")
+struct NetworkScannerResolveTests {
+    @Test("실측 우선 서비스명 (8443 평문이면 HTTP)")
+    func resolveServiceObserved() {
+        #expect(NetworkScanner.resolveService(port: 8443, info: "nginx", usedTLS: false) == "HTTP")
+        #expect(NetworkScanner.resolveService(port: 8443, info: "nginx", usedTLS: true) == "HTTPS")
+        // 비HTTP 매핑(SSH)은 실측에 흔들리지 않음
+        #expect(NetworkScanner.resolveService(port: 22, info: "x", usedTLS: true) == "SSH")
+        // 미매핑 포트는 실측 우선, 실측 없으면 기타
+        #expect(NetworkScanner.resolveService(port: 22_222, info: "x", usedTLS: true) == "HTTPS")
+        #expect(NetworkScanner.resolveService(port: 22_222, info: "x", usedTLS: false) == "HTTP")
+        #expect(
+            NetworkScanner.resolveService(port: 22_222, info: nil, usedTLS: false)
+                == Loc.str("network.service.other"))
+    }
+
+    @Test("넷마스크 기반 서브넷 (/24 동일, /20 cap 2048)")
+    func subnetWithNetmask() {
+        let slash24 = NetworkScanner.subnetIPv4Addresses(from: "192.168.1.13", netmask: "255.255.255.0")
+        #expect(slash24.count == 254)
+        #expect(slash24.first == "192.168.1.1")
+        #expect(slash24.last == "192.168.1.254")
+
+        let slash20 = NetworkScanner.subnetIPv4Addresses(from: "10.19.190.13", netmask: "255.255.240.0")
+        #expect(slash20.count == 2048)
+        #expect(slash20.first == "10.19.176.1")
+
+        // 무효 마스크·/31은 /24 폴백
+        #expect(NetworkScanner.subnetIPv4Addresses(from: "192.168.1.13", netmask: "banana").count == 254)
+        #expect(
+            NetworkScanner.subnetIPv4Addresses(from: "192.168.1.13", netmask: "255.255.255.254").count == 254)
+    }
+}
+
+@Suite("로케일 잔상 마이그레이션·설치 로그")
+struct LocaleRemnantTests {
+    @Test("구버전 터널 라벨 콤마 제거 (1회성)")
+    func migrateLabel() {
+        #expect(
+            TunnelStore.migrateLabel("HTTP 도메인 (127.0.0.1:3,003)")
+                == "HTTP 도메인 (127.0.0.1:3003)")
+        #expect(TunnelStore.migrateLabel("dev (127.0.0.1:3000)") == "dev (127.0.0.1:3000)")
+        #expect(TunnelStore.migrateLabel("plain,label") == "plain,label")
+    }
+
+    @Test("brew 설치 노이즈 걸러내기")
+    func installDisplayLine() async {
+        let noise = "==> Downloading https://example.com/a 50%\n█░ progress\n\nUp and running\n"
+        await #expect(TunnelManager.installDisplayLine(from: noise) == "Up and running")
+        await #expect(TunnelManager.installDisplayLine(from: "   \n█░░\n") == nil)
+        let ansi = "\u{1B}[32m==> Pouring cloudflared\u{1B}[0m\n"
+        await #expect(TunnelManager.installDisplayLine(from: ansi) == "==> Pouring cloudflared")
     }
 }

@@ -34,8 +34,11 @@ struct ProfileEditor: View {
             if mode == .edit {
                 fragmentToggles
                 HostEntryListView(entries: $entries)
+                MemoizedValidationView(entries: entries)
             } else {
                 EditorPreview(hint: L.str("editor.preview.profileHint"), text: previewText)
+                MemoizedValidationView(entries: entries)
+                DiffPreviewView(oldText: model.currentHosts, newText: previewText)
             }
             EditorFooter(
                 canCancel: isDirty,
@@ -56,8 +59,16 @@ struct ProfileEditor: View {
             )
         }
         .padding(16)
-        .onAppear { syncFromProfile() }
+        .onAppear {
+            syncFromProfile()
+            model.requestEditorSave = { saveIfDirty(); return !isDirty }
+        }
+        .onDisappear {
+            model.requestEditorSave = nil
+            model.editorDirty = false
+        }
         .onChange(of: profile.id) { syncFromProfile() }
+        .onChange(of: isDirty) { model.editorDirty = isDirty }
     }
 
     /// 이 프로필에 끼울 프래그먼트 토글. 변경 즉시 저장 (stale은 지문으로 자동 판정).

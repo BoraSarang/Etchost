@@ -43,23 +43,41 @@ struct HostsLineRow: View {
 }
 
 /// 줄 목록을 스크롤 가능한 텍스트로 렌더링 (복사 가능).
+/// 대용량 텍스트는 앞부분만 렌더한다 (8만 줄 전체 Text 생성 방지).
 struct HostsLineList: View {
     let text: String
     var minHeight: CGFloat = 280
+    static let maxLines = 1000
+
+    private var allLines: [String] {
+        text.components(separatedBy: "\n")
+    }
+
+    private var isCapped: Bool {
+        // 줄 수만 필요하므로 전체 배열 대신 개행 개수 + 1로 계산.
+        text.reduce(into: 1) { count, ch in if ch == "\n" { count += 1 } } > Self.maxLines
+    }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(text.components(separatedBy: "\n").enumerated()), id: \.offset) { _, line in
-                    HostsLineRow(line: line)
-                }
+        VStack(alignment: .leading, spacing: 4) {
+            if isCapped {
+                Text(L.str("editor.preview.capped", allLines.count, Self.maxLines))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .textSelection(.enabled)
-            .padding(6)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(allLines.prefix(Self.maxLines).enumerated()), id: \.offset) { _, line in
+                        HostsLineRow(line: line)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+                .padding(6)
+            }
+            .background(.background)
+            .border(.quaternary)
+            .frame(minHeight: minHeight, maxHeight: .infinity)
         }
-        .background(.background)
-        .border(.quaternary)
-        .frame(minHeight: minHeight, maxHeight: .infinity)
     }
 }

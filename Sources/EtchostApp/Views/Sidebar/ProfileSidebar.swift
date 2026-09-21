@@ -25,6 +25,26 @@ struct ProfileSidebar: View {
                 tunnelList
             }
         }
+        .alert(L.str("editor.unsaved.title"), isPresented: $model.showUnsavedAlert) {
+            Button(L.str("editor.unsaved.stay"), role: .cancel) {
+                model.pendingSection = nil
+            }
+            Button(L.str("editor.unsaved.discard"), role: .destructive) {
+                model.confirmPendingTabSwitch()
+            }
+            Button(L.str("editor.unsaved.saveAndGo")) {
+                let clean = model.requestEditorSave?() ?? true
+                if clean {
+                    model.confirmPendingTabSwitch()
+                } else {
+                    // 유효성 오류로 저장 불가 → 머무름.
+                    model.pendingSection = nil
+                    model.showUnsavedAlert = false
+                }
+            }
+        } message: {
+            Text(L.str("editor.unsaved.message"))
+        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 if model.sidebarSection != .network {
@@ -60,7 +80,7 @@ struct ProfileSidebar: View {
     private func tabButton(_ section: SidebarSection) -> some View {
         let isSelected = model.sidebarSection == section
         return Button {
-            model.sidebarSection = section
+            model.requestTabSwitch(to: section)
         } label: {
             Text(section.title)
                 .font(.subheadline)

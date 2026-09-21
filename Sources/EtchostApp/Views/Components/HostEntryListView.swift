@@ -3,8 +3,13 @@ import EtchostKit
 import SwiftUI
 
 /// hosts 항목 구조화 리스트 편집기: 행 = 활성 토글 + IP/도메인/주석 필드 + 삭제, 드래그로 순서 변경.
+/// `readOnly`면 편집 UI 없이 텍스트 행만 표시하며, 대용량(>renderCap)일 땐 처음 N개만 렌더한다.
 struct HostEntryListView: View {
     @Binding var entries: [HostEntry]
+    var readOnly = false
+
+    /// 읽기전용 대용량 목록의 렌더 상한. 전체 렌더 시 수만 개 TextField로 프리징.
+    static let renderCap = 200
 
     @State private var pendingFocusID: UUID?
     @State private var manualText = ""
@@ -22,34 +27,80 @@ struct HostEntryListView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            List {
-                ForEach(entries.indices, id: \.self) { idx in
-                    HostEntryRow(
-                        entry: $entries[idx],
-                        autoFocus: entries[idx].id == pendingFocusID,
-                        isDuplicate: duplicateDomainCount(entries[idx].domain) > 1,
-                        onDelete: { entries.remove(at: idx) }
-                    )
+            if readOnly, entries.count > Self.renderCap {
+                cappedSampleView
+            } else {
+                List {
+                    ForEach(entries.indices, id: \.self) { idx in
+                        HostEntryRow(
+                            entry: $entries[idx],
+                            autoFocus: entries[idx].id == pendingFocusID,
+                            isDuplicate: duplicateCounts[entries[idx].domain.lowercased(), default: 0] > 1,
+                            onDelete: { entries.remove(at: idx) }
+                        )
+                    }
+                    .onMove { from, to in
+                        entries.move(fromOffsets: from, toOffset: to)
+                    }
                 }
-                .onMove { from, to in
-                    entries.move(fromOffsets: from, toOffset: to)
+                .listStyle(.plain)
+                .scrollIndicators(.visible)
+                .frame(minHeight: 150, maxHeight: .infinity)
+                .disabled(readOnly)
+            }
+
+            if !readOnly {
+                Button {
+                    addRow()
+                } label: {
+                    Label(L.str("hosts.add"), systemImage: "plus.circle")
                 }
+                .buttonStyle(.borderless)
+
+                Divider()
+
+                manualRegisterRow
             }
-            .listStyle(.plain)
-            .scrollIndicators(.visible)
-            .frame(minHeight: 150, maxHeight: .infinity)
-
-            Button {
-                addRow()
-            } label: {
-                Label(L.str("hosts.add"), systemImage: "plus.circle")
-            }
-            .buttonStyle(.borderless)
-
-            Divider()
-
-            manualRegisterRow
         }
+    }
+
+    /// 대용량 읽기전용 블롭: 행 UI를 만들지 않고 앞부분 텍스트만 고정 높이 스크롤 박스로 표시.
+    /// 편집 불가 대상에 편집 뷰를 만드는 것이 프리징의 근본 원인이었음 (SwitchHosts 등도 동일 방식).
+    private var cappedSampleView: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(L.str("hosts.list.capped", entries.count, Self.renderCap))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(Array(entries.prefix(Self.renderCap)), id: \.id) { entry in
+                        Text(entry.line)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(entry.isEnabled ? .primary : .secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 400)
+            .background(.quaternary.opacity(0.5))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+    }
+
+    /// 행별 중복 표시용 도메인 빈도표. body당 1회 계산 (행마다 전수 스캔 금지).
+    /// capped 블롭 모드에서는 행 UI가 없어 불필요하므로 스킵.
+    private var duplicateCounts: [String: Int] {
+        guard !(readOnly && entries.count > Self.renderCap) else { return [:] }
+        var counts: [String: Int] = [:]
+        for entry in entries {
+            let d = entry.domain.lowercased()
+            if d == "localhost" || d == "broadcasthost" { continue }
+            counts[d, default: 0] += 1
+        }
+        return counts
     }
 
     /// textbox로 한 줄/여러 줄 입력받아 자동 파싱 후 등록.
@@ -133,13 +184,6 @@ struct HostEntryListView: View {
                 ? L.str("hosts.register.success", added, invalidLines.count, invalidLines.map(String.init).joined(separator: ", "))
                 : L.str("hosts.register.failed", invalidLines.count, invalidLines.map(String.init).joined(separator: ", "))
         }
-    }
-
-    private func duplicateDomainCount(_ domain: String) -> Int {
-        // localhost/broadcasthost는 IPv4+IPv6 두 줄이 정상이라 중복 검사 제외
-        let d = domain.lowercased()
-        if d == "localhost" || d == "broadcasthost" { return 0 }
-        return entries.filter { $0.domain.lowercased() == d }.count
     }
 
     private func addRow() {

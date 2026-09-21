@@ -22,13 +22,13 @@ public struct NetworkScanner: Sendable {
 
     /// 개발자가 자주 쓰는 포트 사전 세트.
     public static let commonPorts = [
-        22, 80, 443, 3000, 3001, 3002, 5173, 8080, 8081, 5000,
+        22, 80, 443, 8443, 3000, 3001, 3002, 3003, 5173, 8080, 8081, 5000,
         5432, 6379, 2375, 2376, 9000, 8000, 9090, 3306, 5555
     ]
 
     private static let serviceByPort: [Int: String] = [
-        22: "SSH", 80: "HTTP", 443: "HTTPS",
-        3000: "HTTP", 3001: "HTTP", 3002: "HTTP", 5173: Loc.str("network.service.http.dev"),
+        22: "SSH", 80: "HTTP", 443: "HTTPS", 8443: "HTTPS",
+        3000: "HTTP", 3001: "HTTP", 3002: "HTTP", 3003: "HTTP", 5173: Loc.str("network.service.http.dev"),
         8080: "HTTP", 8081: "HTTP", 5000: "HTTP",
         5432: "PostgreSQL", 6379: "Redis",
         2375: "Docker API", 2376: "Docker(TLS)",
@@ -36,8 +36,26 @@ public struct NetworkScanner: Sendable {
     ]
 
     private static let fingerprintPorts: Set<Int> = Set([
-        80, 443, 3000, 3001, 3002, 5173, 8080, 8081, 5000, 9000, 8000, 9090
+        80, 443, 8443, 3000, 3001, 3002, 3003, 5173, 8080, 8081, 5000, 9000, 8000, 9090
     ])
+
+    /// TLS 핸드셰이크가 필요한 포트. 평문 GET 실패 시 TLS로 재시도 (개발용 자체서명 인증서 허용).
+    private static let tlsPorts: Set<Int> = [443, 8443]
+
+    /// 실제 프로브 결과 우선 서비스명 판정. 평문 응답 → HTTP, TLS 응답 → HTTPS.
+    /// 포트번호 매핑(HTTP/HTTPS/기타)은 실측과 모순되면 실측으로 교정.
+    /// (예: 8443 매핑 HTTPS라도 평문으로 응답하면 HTTP)
+    static func resolveService(port: Int, info: String?, usedTLS: Bool) -> String {
+        let observed: String? = info == nil ? nil : (usedTLS ? "HTTPS" : "HTTP")
+        guard let mapped = serviceByPort[port] else {
+            return observed ?? Loc.str("network.service.other")
+        }
+        if mapped == "HTTP" || mapped == "HTTPS" || mapped == Loc.str("network.service.other"),
+           let observed {
+            return observed
+        }
+        return mapped
+    }
 
     public static func serviceName(for port: Int) -> String {
         serviceByPort[port] ?? Loc.str("network.service.other")
@@ -45,25 +63,63 @@ public struct NetworkScanner: Sendable {
 
     // MARK: - 주소 탐색
 
-    /// en0/en1 IPv4 주소 목록.
-    public static func localIPv4Addresses() -> [String] {
-        var addresses: [String] = []
+    /// en0/en1 IPv4 주소 + 넷마스크. (ip, netmask) 튜플.
+    public static func localInterfaces() -> [(ip: String, netmask: String)] {
+        var result: [(String, String)] = []
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddr) == 0 else { return [] }
         defer { freeifaddrs(ifaddr) }
         var current = ifaddr
         while let cursor = current {
             defer { current = cursor.pointee.ifa_next }
-            let family = cursor.pointee.ifa_addr.pointee.sa_family
-            guard family == UInt8(AF_INET), (Int32(cursor.pointee.ifa_flags) & IFF_LOOPBACK) == 0 else { continue }
+            guard let addr = cursor.pointee.ifa_addr,
+                  addr.pointee.sa_family == UInt8(AF_INET),
+                  (Int32(cursor.pointee.ifa_flags) & IFF_LOOPBACK) == 0
+            else { continue }
             let name = Self.cString(from: cursor.pointee.ifa_name)
             guard name.hasPrefix("en") else { continue }
-            var addr = cursor.pointee.ifa_addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee.sin_addr }
-            var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
-            inet_ntop(AF_INET, &addr, &buffer, socklen_t(INET_ADDRSTRLEN))
-            addresses.append(Self.cString(from: buffer))
+            guard let mask = cursor.pointee.ifa_netmask else { continue }
+            let ipString = sockaddrInToString(addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee.sin_addr })
+            let maskAddr = mask.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee.sin_addr }
+            let maskString = sockaddrInToString(maskAddr)
+            guard !ipString.isEmpty, !maskString.isEmpty else { continue }
+            result.append((ipString, maskString))
         }
-        return addresses
+        return result
+    }
+
+    private static func sockaddrInToString(_ addr: in_addr) -> String {
+        var copy = addr
+        var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+        inet_ntop(AF_INET, &copy, &buffer, socklen_t(INET_ADDRSTRLEN))
+        return Self.cString(from: buffer)
+    }
+
+    /// 기본 게이트웨이 (route -n get default 파싱). 없으면 nil.
+    public static func defaultGateway() -> String? {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/sbin/route")
+        proc.arguments = ["-n", "get", "default"]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        do { try proc.run() } catch { return nil }
+        proc.waitUntilExit()
+        guard proc.terminationStatus == 0 else { return nil }
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        for line in output.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("gateway:") {
+                let gw = trimmed.dropFirst("gateway:".count).trimmingCharacters(in: .whitespaces)
+                if !gw.isEmpty { return gw }
+            }
+        }
+        return nil
+    }
+
+    /// en0/en1 IPv4 주소 목록.
+    public static func localIPv4Addresses() -> [String] {
+        localInterfaces().map(\.ip)
     }
 
     /// 널 종료 C 문자열을 String으로 (deprecated `String(cString:)` 대체).
@@ -78,7 +134,7 @@ public struct NetworkScanner: Sendable {
         return String(bytes: (0..<end).map { UInt8(bitPattern: pointer[$0]) }, encoding: .utf8) ?? ""
     }
 
-    /// 해당 주소의 /24 서브넷 호스트 주소 (network/broadcast 제외).
+    /// 해당 주소의 /24 서브넷 호스트 주소 (network/broadcast 제외). 레거시 호환용.
     public static func subnetIPv4Addresses(from ip: String) -> [String] {
         let parts = ip.split(separator: ".").compactMap { Int($0) }
         guard parts.count == 4, parts.allSatisfy({ $0 >= 0 && $0 <= 255 }) else { return [] }
@@ -86,16 +142,149 @@ public struct NetworkScanner: Sendable {
         return (1...254).map { prefix + String($0) }
     }
 
+    /// 실제 넷마스크 기반 서브넷 호스트 열거 (network/broadcast 제외, 최대 2048개 cap).
+    /// 마스크 파싱 실패 시 /24로 폴백.
+    public static func subnetIPv4Addresses(from ip: String, netmask: String, maxHosts: Int = 2048) -> [String] {
+        guard let ipNum = ipv4ToUInt32(ip), let maskNum = ipv4ToUInt32(netmask), maskNum != 0 else {
+            return subnetIPv4Addresses(from: ip)
+        }
+        let network = ipNum & maskNum
+        let broadcast = network | ~maskNum
+        // /31, /32 같은 특수 케이스는 /24 폴백
+        guard broadcast > network + 1 else { return subnetIPv4Addresses(from: ip) }
+        var hosts: [String] = []
+        hosts.reserveCapacity(min(Int(broadcast - network - 1), maxHosts))
+        var current = network + 1
+        while current < broadcast, hosts.count < maxHosts {
+            hosts.append(uint32ToIPv4(current))
+            // 오버플로우 방지 (0xFFFFFFFF에서 중단)
+            if current == UInt32.max { break }
+            current &+= 1
+        }
+        return hosts
+    }
+
+    /// 첫 번째 en 인터페이스의 (ip, netmask) 기준 서브넷 호스트.
+    public static func localSubnetHosts() -> [String] {
+        guard let info = localInterfaces().first else { return [] }
+        return subnetIPv4Addresses(from: info.ip, netmask: info.netmask)
+    }
+
+    private static func ipv4ToUInt32(_ ip: String) -> UInt32? {
+        let parts = ip.split(separator: ".").compactMap { UInt32($0) }
+        guard parts.count == 4, parts.allSatisfy({ $0 <= 255 }) else { return nil }
+        return (parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]
+    }
+
+    private static func uint32ToIPv4(_ value: UInt32) -> String {
+        "\((value >> 24) & 0xFF).\((value >> 16) & 0xFF).\((value >> 8) & 0xFF).\(value & 0xFF)"
+    }
+
+    // MARK: - 생존 호스트 필터 (arp + ping sweep)
+
+    /// `arp -a` 캐시에서 읽은 IP 집합.
+    public static func arpHosts() -> Set<String> {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/sbin/arp")
+        proc.arguments = ["-a"]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        do { try proc.run() } catch { return [] }
+        proc.waitUntilExit()
+        guard proc.terminationStatus == 0 else { return [] }
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        var hosts: Set<String> = []
+        for line in output.components(separatedBy: "\n") {
+            // "? (10.19.190.1) at 0:1:2:3:4:5 on en0 ..."
+            guard let open = line.firstIndex(of: "("),
+                  let close = line.firstIndex(of: ")"),
+                  open < close
+            else { continue }
+            let ip = String(line[line.index(after: open)..<close])
+            if ipv4ToUInt32(ip) != nil { hosts.insert(ip) }
+        }
+        return hosts
+    }
+
+    /// 단일 ping (블로킹, 백그라운드 큐 전용). 응답 오면 true.
+    private static func blockingPing(host: String, timeoutMS: Int) -> Bool {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/sbin/ping")
+        proc.arguments = ["-c", "1", "-W", "\(timeoutMS)", "-t", "2", host]
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        do { try proc.run() } catch { return false }
+        proc.waitUntilExit()
+        return proc.terminationStatus == 0
+    }
+
+    private func pingAlive(host: String, timeoutMS: Int) async -> Bool {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(returning: Self.blockingPing(host: host, timeoutMS: timeoutMS))
+            }
+        }
+    }
+
+    /// 후보 중 살아있는 호스트만 반환. arp 히트 + ping 응답.
+    /// ping이 전부 실패하면 arp 히트라도 반환(빈 결과 방지), 둘 다 없으면 빈 배열.
+    /// onProgress(확인완료, 전체)는 200ms 스로틀로 백그라운드에서 호출.
+    public func aliveHosts(
+        candidates: [String],
+        timeoutMS: Int = 300,
+        onProgress: (@Sendable (Int, Int) -> Void)? = nil
+    ) async -> [String] {
+        guard !candidates.isEmpty else { return [] }
+        let arp = Self.arpHosts()
+        let candidateSet = Set(candidates)
+        let arpHit = candidates.filter { arp.contains($0) }
+        let rest = candidates.filter { !arp.contains($0) }
+        onProgress?(candidates.count - rest.count, candidates.count)
+        guard !rest.isEmpty else { return arpHit }
+
+        let limiter = ConcurrencyLimiter(limit: 96)
+        var pinged: [String] = []
+        var checked = candidates.count - rest.count
+        var lastReport = Date.distantPast
+        await withTaskGroup(of: String?.self) { group in
+            for host in rest {
+                group.addTask {
+                    await limiter.acquire()
+                    defer { Task { await limiter.release() } }
+                    let ok = await self.pingAlive(host: host, timeoutMS: timeoutMS)
+                    return ok ? host : nil
+                }
+            }
+            for await found in group {
+                checked += 1
+                if let found, candidateSet.contains(found) { pinged.append(found) }
+                if let onProgress, Date().timeIntervalSince(lastReport) >= 0.2 {
+                    lastReport = Date()
+                    onProgress(min(checked, candidates.count), candidates.count)
+                }
+            }
+        }
+        onProgress?(candidates.count, candidates.count)
+        let combined = arpHit + pinged
+        if combined.isEmpty { return [] }
+        // 후보 순서 유지
+        let order = Dictionary(uniqueKeysWithValues: candidates.enumerated().map { ($1, $0) })
+        return combined.sorted { (order[$0] ?? 0) < (order[$1] ?? 0) }
+    }
+
     // MARK: - 스캔
 
     /// 여러 호스트 × 포트를 병렬 스캔. 오픈된 포트만 결과로 반환.
+    /// onFind/onProgress는 백그라운드 컨텍스트에서 호출되며(메인 스레드 보장 없음),
+    /// 진행 보고는 150ms 스로틀. 호출자가 MainActor 발행 주기를自行 batch할 것.
     public func scan(
         hosts: [String],
         ports: [Int],
         timeout: TimeInterval = 0.5,
         fingerprint: Bool = true,
-        onFind: (@MainActor (PortScanResult) -> Void)? = nil,
-        onProgress: (@MainActor (ScanProgress) -> Void)? = nil
+        onFind: (@Sendable (PortScanResult) -> Void)? = nil,
+        onProgress: (@Sendable (ScanProgress) -> Void)? = nil
     ) async -> [PortScanResult] {
         guard !hosts.isEmpty, !ports.isEmpty else { return [] }
         let limiter = ConcurrencyLimiter(limit: 256)
@@ -109,42 +298,43 @@ public struct NetworkScanner: Sendable {
                     defer { Task { await limiter.release() } }
                     let open = await isPortOpen(host: host, port: port, timeout: timeout)
                     guard open else { return nil }
-                    let server = fingerprint && Self.fingerprintPorts.contains(port)
-                        ? await httpFingerprint(host: host, port: port, timeout: timeout)
-                        : nil
+                    let probed: (info: String?, tls: Bool)
+                    if fingerprint, Self.fingerprintPorts.contains(port) {
+                        probed = await tlsAwareFingerprint(host: host, port: port, timeout: timeout)
+                    } else {
+                        probed = (nil, false)
+                    }
                     return PortScanResult(
                         ip: host,
                         port: port,
-                        service: Self.serviceName(for: port),
-                        httpServer: server
+                        service: Self.resolveService(port: port, info: probed.info, usedTLS: probed.tls),
+                        httpServer: probed.info
                     )
                 }
             }
             var completed = 0
-            let reportStride = max(1, candidates.count / 100)
+            var lastReport = Date.distantPast
             for await result in group {
                 completed += 1
                 if let result {
                     pooled.append(result)
-                    if let onFind {
-                        await MainActor.run { onFind(result) }
-                    }
+                    onFind?(result)
                 }
-                if let onProgress, completed % reportStride == 0 {
-                    let progress = ScanProgress(completed: completed, total: candidates.count, found: pooled.count)
-                    await MainActor.run { onProgress(progress) }
+                let now = Date()
+                if let onProgress, now.timeIntervalSince(lastReport) >= 0.15 {
+                    lastReport = now
+                    onProgress(ScanProgress(completed: completed, total: candidates.count, found: pooled.count))
                 }
             }
             if let onProgress {
-                let progress = ScanProgress(completed: candidates.count, total: candidates.count, found: pooled.count)
-                await MainActor.run { onProgress(progress) }
+                onProgress(ScanProgress(completed: candidates.count, total: candidates.count, found: pooled.count))
             }
         }
 
         var seen: Set<String> = []
         return pooled
             .filter { seen.insert("\($0.ip):\($0.port)").inserted }
-            .sorted { ($0.ip, $0.port) < ($1.ip, $1.port) }
+            .sorted { ($0.port, $0.ip) < ($1.port, $1.ip) }
     }
 
     public func scanLocalhost(ports: [Int] = NetworkScanner.commonPorts, timeout: TimeInterval = 0.35)
@@ -176,6 +366,22 @@ public struct NetworkScanner: Sendable {
                 continuation.resume(returning: Self.blockingHTTP(host: host, port: port, timeout: timeout))
             }
         }
+    }
+
+    /// 평문 HTTP 먼저, 실패하면 TLS 포트에 한해 TLS로 재시도.
+    /// (info, tls=true면 TLS로 응답) 반환.
+    private func tlsAwareFingerprint(host: String, port: Int, timeout: TimeInterval) async -> (info: String?, tls: Bool) {
+        if let plain = await httpFingerprint(host: host, port: port, timeout: timeout),
+           !plain.isEmpty {
+            return (plain, false)
+        }
+        guard Self.tlsPorts.contains(port) else { return (nil, false) }
+        let tls = await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(returning: Self.blockingTLSFingerprint(host: host, port: port, timeout: timeout))
+            }
+        }
+        return (tls, tls != nil)
     }
 
     // MARK: - POSIX 블로킹 헬퍼 (백그라운드 큐 전용)
@@ -299,17 +505,70 @@ public struct NetworkScanner: Sendable {
             break
         }
 
-        var title: String?
-        if let range = text.range(of: "<title[^>]*>", options: .regularExpression) {
-            let searchRange = text.index(after: range.lowerBound)..<text.endIndex
-            if let end = text.range(of: "</title>", options: .caseInsensitive, range: searchRange) {
-                title = String(text[range.upperBound..<end.lowerBound])
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-        }
-
-        let parts = [server, title].compactMap { $0?.isEmpty == false ? $0 : nil }
+        let parts = [server, parseTitle(text)].compactMap { $0?.isEmpty == false ? $0 : nil }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// HTML <title> 추출 (평문/TLS 핑거프린트 공용).
+    private static func parseTitle(_ text: String) -> String? {
+        guard let range = text.range(of: "<title[^>]*>", options: .regularExpression) else { return nil }
+        let searchRange = text.index(after: range.lowerBound)..<text.endIndex
+        guard let end = text.range(of: "</title>", options: .caseInsensitive, range: searchRange) else { return nil }
+        let title = String(text[range.upperBound..<end.lowerBound])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return title.isEmpty ? nil : title
+    }
+
+    /// TLS 포트용 핑거프린트. 개발용 자체서명 인증서도 허용하고 Server 헤더 + <title> 수집.
+    /// 백그라운드 큐 전용 (블로킹).
+    private static func blockingTLSFingerprint(host: String, port: Int, timeout: TimeInterval) -> String? {
+        guard let url = URL(string: "https://\(host):\(port)/") else { return nil }
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = timeout
+        config.timeoutIntervalForResource = timeout + 1
+        let delegate = TrustAllSessionDelegate()
+        let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+
+        let output = LockedValue<String?>(nil)
+        let semaphore = DispatchSemaphore(value: 0)
+        let task = session.dataTask(with: url) { data, response, _ in
+            defer { semaphore.signal() }
+            guard let data, let http = response as? HTTPURLResponse else { return }
+            var server: String?
+            for (key, value) in http.allHeaderFields where "\(key)".lowercased() == "server" {
+                if let text = value as? String, !text.isEmpty { server = text }
+                break
+            }
+            let body = String(data: data, encoding: .utf8) ?? ""
+            let parts = [server, parseTitle(body)].compactMap { $0?.isEmpty == false ? $0 : nil }
+            output.value = parts.isEmpty ? nil : parts.joined(separator: " · ")
+        }
+        task.resume()
+        _ = semaphore.wait(timeout: .now() + timeout + 2)
+        return output.value
+    }
+}
+
+/// 세마포어 동기화용 단순 값 상자 (Sendable 클로저 캡처용).
+private final class LockedValue<T>: @unchecked Sendable {
+    var value: T
+    init(_ value: T) { self.value = value }
+}
+
+/// 개발용 자체서명 인증서도 신뢰하는 URLSession delegate (HTTPS 핑거프린트용).
+private final class TrustAllSessionDelegate: NSObject, URLSessionDelegate, @unchecked Sendable {
+    func urlSession(
+        _ session: URLSession,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+           let trust = challenge.protectionSpace.serverTrust {
+            completionHandler(.useCredential, URLCredential(trust: trust))
+        } else {
+            completionHandler(.performDefaultHandling, nil)
+        }
     }
 }
 

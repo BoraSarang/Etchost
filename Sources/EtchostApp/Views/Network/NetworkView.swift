@@ -8,6 +8,8 @@ struct NetworkView: View {
     @ObservedObject private var tunnels: TunnelManager
 
     @State private var hostInput = ""
+    @State private var portMode: PortScanMode = .defaultPorts
+    @State private var portText = ""
     @State private var scanResults: [PortScanResult] = []
     @State private var selectedResult: PortScanResult.ID?
     @State private var isScanning = false
@@ -15,6 +17,8 @@ struct NetworkView: View {
     @State private var lastTarget: String?
     @State private var scanCompleted = 0
     @State private var scanTotal = 0
+    @State private var scanStageAlive = false
+    @State private var scanElapsed: TimeInterval?
     @State private var cacheInfo: String?
     @State private var logTunnelID: TunnelLogSelection?
 
@@ -28,6 +32,27 @@ struct NetworkView: View {
     private struct TunnelLogSelection: Identifiable {
         var id: UUID { tunnelID }
         let tunnelID: UUID
+    }
+
+    /// 스캔 포트 모드 3종.
+    private enum PortScanMode: String, CaseIterable, Identifiable {
+        case defaultPorts, custom, range
+        var id: String { rawValue }
+        var titleKey: String {
+            switch self {
+            case .defaultPorts: return "network.scan.ports.mode.default"
+            case .custom: return "network.scan.ports.mode.custom"
+            case .range: return "network.scan.ports.mode.range"
+            }
+        }
+    }
+
+    /// 포트 모드 표시명. 기본 모드는 개수 동적 반영.
+    private func portModeTitle(_ mode: PortScanMode) -> String {
+        if mode == .defaultPorts {
+            return L.str(mode.titleKey, AppSettings.shared.effectiveDefaultScanPorts.count)
+        }
+        return L.str(mode.titleKey)
     }
 
     init() {
@@ -115,6 +140,12 @@ if let change = tunnels.lastIPChange {
                 Text(L.str("network.scan.title"))
                     .font(.headline)
                 Spacer()
+                if let elapsed = scanElapsed, !isScanning {
+                    Text(String(format: "%.1fs", elapsed))
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
                 if let target = lastTarget {
                     Text(target)
                         .font(.caption)
@@ -128,11 +159,17 @@ if let change = tunnels.lastIPChange {
             }
 
             HStack(spacing: 8) {
-                TextField(L.str("network.scan.inputPlaceholder"), text: $hostInput)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: .infinity)
                 Button(L.str("network.scan.localhost")) {
                     startScan(hosts: ["127.0.0.1"])
+                }
+                .disabled(isScanning)
+                Button(L.str("network.scan.gateway")) {
+                    scanError = nil
+                    guard let gw = NetworkScanner.defaultGateway() else {
+                        scanError = L.str("network.scan.gatewayError")
+                        return
+                    }
+                    startScan(hosts: [gw])
                 }
                 .disabled(isScanning)
                 Button(L.str("network.scan.lan")) {
@@ -145,11 +182,47 @@ if let change = tunnels.lastIPChange {
                     startScan(hosts: hosts)
                 }
                 .disabled(isScanning)
+                TextField(L.str("network.scan.inputPlaceholder"), text: $hostInput)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: .infinity)
                 Button(L.str("network.scan.custom")) {
                     let ip = hostInput.trimmingCharacters(in: .whitespaces)
                     startScan(hosts: ip.isEmpty ? ["127.0.0.1"] : [ip])
                 }
                 .disabled(isScanning)
+            }
+
+            HStack(spacing: 8) {
+                Menu {
+                    ForEach(PortScanMode.allCases) { mode in
+                        Button(portModeTitle(mode)) { portMode = mode }
+                    }
+                } label: {
+                    Label(portModeTitle(portMode), systemImage: "chevron.down")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(isScanning)
+                .help(portModeTitle(portMode))
+
+                if portMode != .defaultPorts {
+                    TextField(
+                        portMode == .custom
+                            ? L.str("network.scan.ports.customPlaceholder")
+                            : L.str("network.scan.ports.rangePlaceholder"),
+                        text: $portText
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: .infinity)
+                    .disabled(isScanning)
+                } else {
+                    // 기본 포트 목록 표시 (중복 타이틀 대신 실제 포트 나열).
+                    Text(AppSettings.shared.effectiveDefaultScanPorts.map(String.init).joined(separator: ", "))
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
             }
 
             if isScanning {
@@ -164,7 +237,11 @@ if let change = tunnels.lastIPChange {
                         .font(.caption)
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
-                    Text(L.str("network.scan.checking", scanCompleted, scanTotal))
+                    Text(
+                        scanStageAlive
+                            ? L.str("network.scan.aliveChecking", scanCompleted, scanTotal)
+                            : L.str("network.scan.checking", scanCompleted, scanTotal)
+                    )
                         .font(.caption)
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
@@ -194,6 +271,10 @@ if let change = tunnels.lastIPChange {
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
+                    .disabled(tunnels.cloudflaredPath == nil)
+                    .help(tunnels.cloudflaredPath == nil
+                        ? L.str("error.cloudflaredNotInstalled")
+                        : L.str("network.scan.createTunnel"))
                 } else {
                     Spacer()
                     Text(L.str("network.scan.selectHint"))
@@ -207,42 +288,149 @@ if let change = tunnels.lastIPChange {
 
     private var scanResultsTable: some View {
         Table(scanResults, selection: $selectedResult) {
-            TableColumn(L.str("network.scan.table.ip")) { Text($0.ip) }
-            TableColumn(L.str("network.scan.table.port")) { Text("\($0.port)") }
-            TableColumn(L.str("network.scan.table.service")) { Text($0.service) }
-            TableColumn(L.str("network.scan.table.http")) { Text($0.httpServer ?? "–") }
+            TableColumn(L.str("network.scan.table.ip")) { result in
+                Text(result.ip)
+                    .font(.system(.body, design: .monospaced))
+            }
+            .width(min: 100, max: 120)
+            TableColumn(L.str("network.scan.table.port")) { result in
+                // 천단위 구분자 없이 (5,555 → 5555)
+                Text(String(result.port))
+                    .font(.system(.body, design: .monospaced))
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+            .width(56)
+            TableColumn(L.str("network.scan.table.service")) { result in
+                Text(result.service)
+                    .lineLimit(1)
+            }
+            .width(min: 90, max: 120)
+            TableColumn(L.str("network.scan.table.info")) { result in
+                Text(result.httpServer ?? "–")
+                    .foregroundStyle(result.httpServer == nil ? .secondary : .primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
         }
         .frame(height: 160)
     }
 
     private func startScan(hosts: [String]) {
         guard !hosts.isEmpty else { return }
-        let ports = AppSettings.shared.configuredScanPorts ?? NetworkScanner.commonPorts
+        // 포트 3종: 기본 / 지정 / 대역 (지정·대역은 PortList 파서 공유).
+        let mode = portMode
+        let input = portText
+        let ports: [Int]
+        switch mode {
+        case .defaultPorts:
+            ports = AppSettings.shared.effectiveDefaultScanPorts
+        case .custom:
+            // 비우면常用 포트 전체(1~10000). 49152 위는 ephemeral이라 제외.
+            // LAN 전체에선 tooMany 가드로 차단됨.
+            let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                ports = Array(1...10000)
+                break
+            }
+            let parsed = PortList.parse(trimmed)
+            guard !parsed.isEmpty, !PortList.hasInvalidToken(trimmed) else {
+                scanError = L.str("settings.scanPorts.invalid")
+                return
+            }
+            ports = parsed
+        case .range:
+            let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                scanError = L.str("network.scan.ports.empty")
+                return
+            }
+            let parsed = PortList.parse(trimmed)
+            guard !parsed.isEmpty, !PortList.hasInvalidToken(trimmed) else {
+                scanError = L.str("settings.scanPorts.invalid")
+                return
+            }
+            ports = parsed
+        }
+        // 가드: LAN 전체 × 대역 폭발 차단. 풀 대역(65,535)은 단일 IP에서만.
+        if hosts.count > 16, ports.count > 500 {
+            scanError = L.str("network.scan.tooMany", hosts.count * ports.count)
+            return
+        }
         scanError = nil
         isScanning = true
-        scanResults = []
+        // 누적 머지: 스캔 대상 호스트는 새 결과로 교체, 대상 밖은 유지.
+        let previous = scanResults
+        let scannedSet = Set(hosts)
         scanCompleted = 0
         scanTotal = hosts.count * ports.count
+        scanElapsed = nil
         let started = Date()
-        Task { @MainActor in
-            var seen: Set<String> = []
+        // 백그라운드 스캔: 무거운 작업이 메인스레드를 막지 않음.
+        // UI 발행은 0.5초 배치로 스로틀 (행걸림/스크롤 버벅 방지).
+        Task {
+            // 같은 네트워크 전체면 생존 필터 먼저 (20초 → 2~3초).
+            // 1단계 진행률(생존 확인)도 표시해서 0% 정체처럼 보이지 않게.
+            var targets = hosts
+            var timeout: TimeInterval = hosts.count > 1 ? 0.5 : 0.8
+            if hosts.count > 16 {
+                await MainActor.run {
+                    scanStageAlive = true
+                    scanCompleted = 0
+                    scanTotal = hosts.count
+                }
+                let alive = await NetworkScanner.shared.aliveHosts(candidates: hosts) { done, total in
+                    Task { await MainActor.run {
+                        scanCompleted = done
+                        scanTotal = total
+                    } }
+                }
+                if !alive.isEmpty {
+                    targets = alive
+                    let total = alive.count * ports.count
+                    await MainActor.run {
+                        scanStageAlive = false
+                        scanCompleted = 0
+                        scanTotal = total
+                    }
+                } else {
+                    timeout = 0.35
+                    await MainActor.run { scanStageAlive = false }
+                }
+            }
+            let drain = ScanDrain(seen: Set(previous.map { "\($0.ip):\($0.port)" }))
             let results = await NetworkScanner.shared.scan(
-                hosts: hosts,
+                hosts: targets,
                 ports: ports,
-                timeout: 1.0,
+                timeout: timeout,
                 fingerprint: true
             ) { result in
-                guard seen.insert("\(result.ip):\(result.port)").inserted else { return }
-                scanResults.append(result)
+                drain.append(result)
             } onProgress: { progress in
-                scanCompleted = progress.completed
+                let batch = drain.popBatchIfDue(interval: 0.5)
+                Task { await MainActor.run {
+                    if !batch.isEmpty { scanResults.append(contentsOf: batch) }
+                    scanCompleted = progress.completed
+                } }
             }
-            logScanDiagnostics(hosts: hosts, results: results, started: started, ownIP: NetworkScanner.localIPv4Addresses().first)
-            scanResults = results
-            lastTarget = hosts.count > 1 ? L.str("network.scan.lastTarget.lan", hosts.count) : hosts.first
-            cacheInfo = nil
-            saveCachedScan(hosts: hosts, ownIP: NetworkScanner.localIPv4Addresses().first, results: results)
-            isScanning = false
+            let tail = drain.popAll()
+            let elapsed = Date().timeIntervalSince(started)
+            let ownIP = NetworkScanner.localIPv4Addresses().first
+            await MainActor.run {
+                scanElapsed = elapsed
+                scanStageAlive = false
+                logScanDiagnostics(hosts: targets, results: results, started: started, ownIP: ownIP)
+                // 재스캔 머지: 스캔한 호스트 중 새 결과에 없으면(닫힘) 삭제.
+                let kept = previous.filter { !scannedSet.contains($0.ip) }
+                // 포트 번호 ASC 정렬 (포트 → IP).
+                let merged = (kept + results).sorted { ($0.port, $0.ip) < ($1.port, $1.ip) }
+                var dedup: Set<String> = []
+                scanResults = merged.filter { dedup.insert("\($0.ip):\($0.port)").inserted }
+                _ = tail
+                lastTarget = targets.count > 1 ? L.str("network.scan.lastTarget.lan", targets.count) : targets.first
+                cacheInfo = nil
+                saveCachedScan(hosts: targets, ownIP: ownIP, results: scanResults)
+                isScanning = false
+            }
         }
     }
 
@@ -303,6 +491,9 @@ if let change = tunnels.lastIPChange {
     }
 
     private func lanHosts() -> [String] {
+        // 실제 넷마스크 기반 (회사망 /20 등 대응, 최대 2048 cap).
+        let hosts = NetworkScanner.localSubnetHosts()
+        if !hosts.isEmpty { return hosts }
         guard let own = NetworkScanner.localIPv4Addresses().first else { return [] }
         return NetworkScanner.subnetIPv4Addresses(from: own)
     }
@@ -312,7 +503,8 @@ if let change = tunnels.lastIPChange {
     private func createTunnel(for result: PortScanResult) {
         let base = result.service.isEmpty ? "port-\(result.port)" : result.service
         // 같은 서비스 포트가 여러 개여도 이름 충돌 없도록 ip:port를 포함해 유니크하게.
-        let label = L.str("network.tunnel.labelFormat", base, result.ip, result.port)
+        // 포트 천단위 구분자 방지: %@ + 문자열 전달 (로케일 %d 그룹핑 회피).
+        let label = L.str("network.tunnel.labelFormat", base, result.ip, String(result.port))
         do {
             try tunnels.createTunnel(label: label, ip: result.ip, port: result.port, start: true)
         } catch {
@@ -357,9 +549,12 @@ if let change = tunnels.lastIPChange {
     }
 
     private var tunnelTable: some View {
+        // 중요도순: 제어 → 상태 → 포트 → URL → 대상 → 이름 (좁으면 오른쪽부터 잘림).
         Table(tunnels.tunnels) {
-            TableColumn(L.str("network.tunnel.table.name")) { Text($0.label).lineLimit(1) }
-            TableColumn(L.str("network.tunnel.table.target")) { Text("\($0.ip):\($0.port)") }
+            TableColumn(L.str("network.tunnel.table.control")) { tunnel in
+                controls(for: tunnel)
+            }
+            .width(108)
             TableColumn(L.str("network.tunnel.table.status")) { tunnel in
                 HStack(spacing: 5) {
                     Circle()
@@ -367,14 +562,24 @@ if let change = tunnels.lastIPChange {
                         .frame(width: 8, height: 8)
                     Text(tunnel.status.title)
                 }
+                .help(tunnel.status.title)
             }
+            .width(88)
+            TableColumn(L.str("network.tunnel.table.port")) { tunnel in
+                Text(String(tunnel.port))
+                    .font(.system(.body, design: .monospaced))
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .help("\(tunnel.ip):\(tunnel.port)")
+            }
+            .width(56)
             TableColumn(L.str("network.tunnel.table.url")) { tunnel in
                 if let domain = tunnel.publicDomain {
                     HStack(spacing: 6) {
-                        Text(domain)
+                        Text(shortDomain(domain))
                             .foregroundStyle(.blue)
                             .lineLimit(1)
                             .truncationMode(.middle)
+                            .help(domain)
                         Button {
                             copyToPasteboard(domain)
                         } label: {
@@ -393,11 +598,34 @@ if let change = tunnels.lastIPChange {
                         .foregroundStyle(.secondary)
                 }
             }
-            TableColumn(L.str("network.tunnel.table.control")) { tunnel in
-                controls(for: tunnel)
+            .width(min: 150, ideal: 220)
+            TableColumn(L.str("network.tunnel.table.target")) { tunnel in
+                Text(tunnel.ip)
+                    .font(.system(.body, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .help(tunnel.ip)
             }
+            .width(min: 110, max: 140)
+            TableColumn(L.str("network.tunnel.table.name")) { tunnel in
+                Text(tunnel.label)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .help(tunnel.label)
+            }
+            .width(min: 120, max: 180)
         }
         .frame(minHeight: 120, maxHeight: .infinity)
+    }
+
+    /// `https://xxx.trycloudflare.com` → `xxx.trycloudflare.com` 단축 표시.
+    private func shortDomain(_ urlString: String) -> String {
+        if let url = URL(string: urlString), let host = url.host, !host.isEmpty {
+            return host
+        }
+        return urlString
+            .replacingOccurrences(of: "https://", with: "")
+            .replacingOccurrences(of: "http://", with: "")
     }
 
     private func controls(for tunnel: ManagedTunnel) -> some View {
@@ -461,6 +689,37 @@ private extension NetworkView {
     func openInBrowser(_ urlString: String) {
         guard let url = URL(string: urlString) else { return }
         NSWorkspace.shared.open(url)
+    }
+}
+
+/// 스캔 발견 버퍼. 스캐너 콜백(단일 consumer 루프에서 직렬 호출)용.
+/// UI 발행은 0.5초 배치로 스로틀해서 Table 재렌더/스크롤 버벅을 방지.
+private final class ScanDrain: @unchecked Sendable {
+    private var pending: [PortScanResult] = []
+    private var seen: Set<String>
+    private var lastFlush = Date()
+
+    init(seen: Set<String>) { self.seen = seen }
+
+    func append(_ result: PortScanResult) {
+        guard seen.insert("\(result.ip):\(result.port)").inserted else { return }
+        pending.append(result)
+    }
+
+    /// 마지막 flush 후 interval이 지났으면 대기분 반환, 아니면 빈 배열.
+    func popBatchIfDue(interval: TimeInterval) -> [PortScanResult] {
+        guard !pending.isEmpty, Date().timeIntervalSince(lastFlush) >= interval else { return [] }
+        lastFlush = Date()
+        let batch = pending
+        pending = []
+        return batch
+    }
+
+    func popAll() -> [PortScanResult] {
+        lastFlush = Date()
+        let batch = pending
+        pending = []
+        return batch
     }
 }
 

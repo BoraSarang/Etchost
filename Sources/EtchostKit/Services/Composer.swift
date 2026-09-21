@@ -72,14 +72,21 @@ public struct Composer: Sendable {
 
     /// stale 판정용 지문. 본문 + 토글 ID + 참조 프래그먼트 내용을 모두 포함 —
     /// 프래그먼트 편집/토글만으로 참조 프로필 전체가 `적용 필요`가 됨.
+    /// 대용량 프래그먼트에서도 거대 문자열을 만들지 않고 항목 단위로 해싱한다.
+    /// 주의: 해싱 방식 변경으로 기존 appliedHash와 불일치 → 업데이트 1회성 전체 stale (다시 적용 필요).
     public func fingerprint(profile: Profile, fragments: [Fragment] = []) -> String {
         var hasher = Hasher()
-        hasher.combine("composer:baseline-v1")
+        hasher.combine("composer:baseline-v2")
         hasher.combine(profile.currentHash)
         hasher.combine(profile.fragmentIDs.sorted().map(\.uuidString).joined(separator: ","))
         for fragment in referencedFragments(profile: profile, fragments: fragments) {
             hasher.combine(fragment.id.uuidString)
-            hasher.combine(HostEntry.text(from: fragment.entries))
+            for entry in fragment.entries {
+                hasher.combine(entry.ip)
+                hasher.combine(entry.domain)
+                hasher.combine(entry.comment ?? "")
+                hasher.combine(entry.isEnabled)
+            }
         }
         return String(hasher.finalize(), radix: 16)
     }

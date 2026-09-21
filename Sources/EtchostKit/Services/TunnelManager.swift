@@ -156,6 +156,10 @@ public final class TunnelManager: ObservableObject {
             process.executableURL = URL(fileURLWithPath: brew)
             process.arguments = ["install", "cloudflared"]
         }
+        // brew 환경 힌트(HOMEBREW_NO_ENV_HINTS...) 출력 방지.
+        var environment = ProcessInfo.processInfo.environment
+        environment["HOMEBREW_NO_ENV_HINTS"] = "1"
+        process.environment = environment
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe
@@ -168,9 +172,10 @@ public final class TunnelManager: ObservableObject {
             let text = String(data: data, encoding: .utf8) ?? ""
             Task { @MainActor [weak self] in
                 guard let self, !text.isEmpty else { return }
-                let tail = String(text.split(whereSeparator: \.isNewline).last.map { String($0.suffix(64)) } ?? "")
-                if !tail.isEmpty {
-                    self.installMessage = tail
+                // 터미널 날것(진행률 바, 환경 힌트, ANSI 코드)은 걸러내고
+                // 의미 있는 마지막 줄만 표시.
+                if let line = Self.installDisplayLine(from: text) {
+                    self.installMessage = line
                 }
             }
         }
@@ -190,10 +195,41 @@ public final class TunnelManager: ObservableObject {
         }
     }
 
+    /// brew 설치 출력에서 UI에 보여줄 한 줄 추출. 노이즈면 nil.
+    /// 다운로드 진행률 바, 환경 힌트, 빈 줄은 건너뛰고 의미 있는 마지막 줄만 (최대 90자).
+    static func installDisplayLine(from text: String) -> String? {
+        // ANSI 이스케이프 제거.
+        let ansi = try? NSRegularExpression(pattern: "\u{1B}\\[[0-9;?]*[A-Za-z]")
+        let lines = text.components(separatedBy: .newlines)
+        for raw in lines.reversed() {
+            var line = raw
+            if let ansi {
+                line = ansi.stringByReplacingMatches(
+                    in: line, range: NSRange(line.startIndex..., in: line), withTemplate: "")
+            }
+            line = line.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty else { continue }
+            let lower = line.lowercased()
+            // 노이즈 패턴 스킵.
+            if lower.contains("homebrew_no_env_hints") || lower.contains("man brew") { continue }
+            if line.contains("█") || line.contains("░") { continue }
+            if lower.hasPrefix("==> downloading") && line.contains("%") { continue }
+            return String(line.prefix(90))
+        }
+        return nil
+    }
+
     // MARK: - CRUD
 
     @discardableResult
     public func createTunnel(label: String, ip: String, port: Int, start: Bool = true) throws -> Tunnel {
+        // cloudflared 없이 터널 추가 방지 (좀비 터널/무응답 실행 방지).
+        if cloudflaredPath == nil {
+            cloudflaredPath = detectCloudflared()
+        }
+        guard cloudflaredPath != nil else {
+            throw EtchostError.cloudflaredNotInstalled
+        }
         let tunnel = try store.create(label: label, ip: ip, port: port)
         sessions[tunnel.id] = Session(tunnel: tunnel)
         publish()
@@ -222,7 +258,14 @@ public final class TunnelManager: ObservableObject {
     // MARK: - 실행 제어
 
     public func startTunnel(_ id: UUID) {
-        guard let path = cloudflaredPath else { return }
+        // 미설치 시 조용히 무시하지 않고 에러 상태로 표시.
+        guard let path = cloudflaredPath else {
+            if sessions[id] != nil {
+                sessions[id]?.status = .error(EtchostError.cloudflaredNotInstalled.localizedDescription)
+                publish()
+            }
+            return
+        }
         guard var session = sessions[id], session.process == nil || session.status == .stopped else { return }
         session.status = .starting
         session.publicDomain = nil

@@ -21,7 +21,12 @@ public final class AppSettings {
     public private(set) var autoStartTunnelsAtLaunch = false
     public private(set) var autoRebookTunnels = false
     public private(set) var customScanPortsInput = ""
+    /// 사용자 편집 기본 포트 문자열 (콤마 나열, 대역 가능). 비어 있으면 Kit 기본값.
+    public private(set) var defaultScanPortsInput = ""
     public private(set) var backupRetention = SettingsKeys.backupRetentionDefault
+
+    /// 원격 프래그먼트 자동 동기화 마스터 스위치. 기본 ON.
+    public private(set) var remoteSyncAutoSync = true
 
     /// 선택한 (사용자가 고른) 앱 언어. 시스템 기본이면 .system.
     public private(set) var language: AppLanguage = .system
@@ -87,6 +92,8 @@ public final class AppSettings {
         autoStartTunnelsAtLaunch = defaults.bool(forKey: SettingsKeys.autoStartTunnelsAtLaunch)
         autoRebookTunnels = defaults.bool(forKey: SettingsKeys.autoRebookTunnels)
         customScanPortsInput = defaults.string(forKey: SettingsKeys.customScanPorts) ?? ""
+        defaultScanPortsInput = defaults.string(forKey: SettingsKeys.defaultScanPorts) ?? ""
+        remoteSyncAutoSync = defaults.object(forKey: SettingsKeys.remoteSyncAutoSync) as? Bool ?? true
         let storedRetention = defaults.integer(forKey: SettingsKeys.backupRetention)
         backupRetention = storedRetention >= SettingsKeys.backupRetentionMin
             ? min(storedRetention, SettingsKeys.backupRetentionMax)
@@ -168,10 +175,47 @@ public final class AppSettings {
         UserDefaults.standard.set(input, forKey: SettingsKeys.customScanPorts)
     }
 
+    /// 사용자 편집 기본 포트 목록 (ASC). 비어 있으면 Kit 기본값.
+    public var defaultScanPorts: [Int] {
+        let ports = PortList.parse(defaultScanPortsInput)
+        return (ports.isEmpty ? NetworkScanner.commonPorts : ports).sorted()
+    }
+
+    public var defaultPortsCustomized: Bool {
+        !defaultScanPortsInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    public func addDefaultPorts(_ input: String) {
+        let additions = PortList.parse(input)
+        guard !additions.isEmpty, !PortList.hasInvalidToken(input) else { return }
+        var merged = Set(defaultScanPorts)
+        for port in additions { merged.insert(port) }
+        setDefaultScanPortsInput(merged.sorted().map(String.init).joined(separator: ","))
+    }
+
+    public func removeDefaultPort(_ port: Int) {
+        let remaining = defaultScanPorts.filter { $0 != port }
+        setDefaultScanPortsInput(remaining.map(String.init).joined(separator: ","))
+    }
+
+    public func resetDefaultPorts() {
+        setDefaultScanPortsInput("")
+    }
+
+    private func setDefaultScanPortsInput(_ input: String) {
+        defaultScanPortsInput = input
+        UserDefaults.standard.set(input, forKey: SettingsKeys.defaultScanPorts)
+    }
+
     /// 유효한 커스텀 포트 목록. 비어 있으면 nil (기본값 사용 의미).
     public var configuredScanPorts: [Int]? {
         let ports = PortList.parse(customScanPortsInput)
         return ports.isEmpty ? nil : ports
+    }
+
+    /// 스캔 화면 기본 모드가 실제 쓰는 포트 (커스텀 override → 사용자 기본값 → Kit 기본값).
+    public var effectiveDefaultScanPorts: [Int] {
+        configuredScanPorts ?? defaultScanPorts
     }
 
     public var customPortsHasInvalid: Bool {
@@ -219,6 +263,12 @@ public final class AppSettings {
         guard backupRetention != clamped else { return }
         backupRetention = clamped
         UserDefaults.standard.set(clamped, forKey: SettingsKeys.backupRetention)
+    }
+
+    public func setRemoteSyncAutoSync(_ on: Bool) {
+        guard remoteSyncAutoSync != on else { return }
+        remoteSyncAutoSync = on
+        UserDefaults.standard.set(on, forKey: SettingsKeys.remoteSyncAutoSync)
     }
 
     // MARK: - 업데이트 확인

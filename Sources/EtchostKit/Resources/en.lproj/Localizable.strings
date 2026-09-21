@@ -21,6 +21,14 @@
 "error.profileNotFound" = "Profile not found.";
 "error.releaseFetchFailed" = "Could not fetch release information.";
 "error.releaseURLFailed" = "Failed to build the release URL.";
+"error.remoteSyncEmpty" = "Empty response.";
+"error.remoteSyncEncoding" = "Not UTF-8 text.";
+"error.remoteSyncFailed" = "Remote sync failed: %@";
+"error.remoteSyncHTTP" = "Server error %1$d (%2$@)";
+"error.remoteSyncNetwork" = "Network error: %@";
+"error.remoteSyncNotHosts" = "Not hosts format (e.g. HTML).";
+"error.remoteSyncTooLarge" = "Response too large (URLs over 1MB cannot be used).";
+"error.remoteSyncTooMany" = "Too many entries (%1$d, max %2$d).";
 "error.scanFailed" = "Port scan failed: %@";
 "error.tunnelNotFound" = "Tunnel not found.";
 "error.unknown" = "Unknown error: %@";
@@ -37,3 +45,9 @@
 "tunnel.status.stopped" = "Stopped";
 "tunnel.status.stopping" = "Stopping";
 "tunnel.terminated" = "The process exited unexpectedly.";
+"validator.conflictingIP" = "Conflict: %@ maps to multiple IPs (%@)";
+"validator.duplicateDomain" = "Duplicate hostname %1$@: appears in %2$d lines";
+"validator.invalidDomain" = "Invalid hostname format: %@";
+"validator.invalidIP" = "Invalid IP format: %@";
+"validator.invalidLine" = "Line %1$d unparseable";
+"validator.suspiciousRedirect" = "Review needed: %@ points at loopback/private IP (intended block or possible tampering)";

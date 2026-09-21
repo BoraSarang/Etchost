@@ -41,6 +41,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task {
             await AppSettings.shared.maybeAutoCheckForUpdate()
         }
+        Task {
+            await AppModel.shared.syncDueRemoteFragments()
+        }
         if !AppSettings.shared.openHostManagerAtLaunch {
             DispatchQueue.main.async {
                 NSApp.windows.first(where: { $0.identifier?.rawValue == "main" })?.close()
@@ -78,9 +81,10 @@ struct SettingsView: View {
     @Environment(AppSettings.self) private var settings
 
     private let retentionOptions = [10, 20, 50, 100]
-    private static let defaultPortCount = NetworkScanner.commonPorts.count
     @State private var languageChanged = false
     @State private var showUpdateSheet = false
+    @State private var addPortText = ""
+    @State private var addPortError: String?
 
     var body: some View {
         Form {
@@ -208,13 +212,73 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                Text(L.str("settings.scanPorts.default", Self.defaultPortCount))
+                Text(L.str("settings.scanPorts.default", settings.defaultScanPorts.count))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            // 기본 포트 목록 편집 (삭제 × / 추가 / 복원).
+            Text(L.str("settings.scanPorts.defaultsTitle", settings.defaultScanPorts.count))
+                .font(.headline)
+                .padding(.top, 4)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 64))], spacing: 6) {
+                ForEach(settings.defaultScanPorts, id: \.self) { port in
+                    HStack(spacing: 2) {
+                        Text(String(port))
+                            .font(.system(.body, design: .monospaced))
+                        Button {
+                            settings.removeDefaultPort(port)
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.borderless)
+                        .help(String(port))
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Color.gray.opacity(0.15), in: Capsule())
+                }
+            }
+            HStack(spacing: 8) {
+                TextField(
+                    L.str("settings.scanPorts.addPlaceholder"),
+                    text: $addPortText
+                )
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { addDefaultPorts() }
+                Button(L.str("settings.scanPorts.add")) {
+                    addDefaultPorts()
+                }
+                .controlSize(.small)
+                if settings.defaultPortsCustomized {
+                    Button(L.str("settings.scanPorts.reset")) {
+                        settings.resetDefaultPorts()
+                    }
+                    .controlSize(.small)
+                }
+            }
+            if let error = addPortError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
             }
         } header: {
             Text(L.str("settings.section.network"))
         }
+    }
+
+    private func addDefaultPorts() {
+        let trimmed = addPortText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let parsed = PortList.parse(trimmed)
+        guard !parsed.isEmpty, !PortList.hasInvalidToken(trimmed) else {
+            addPortError = L.str("settings.scanPorts.invalid")
+            return
+        }
+        settings.addDefaultPorts(trimmed)
+        addPortText = ""
+        addPortError = nil
     }
 
     // MARK: - 백업
@@ -235,6 +299,17 @@ struct SettingsView: View {
             .pickerStyle(.segmented)
 
             Text(L.str("settings.backup.description"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Toggle(
+                L.str("settings.remoteSyncAutoSync"),
+                isOn: Binding(
+                    get: { settings.remoteSyncAutoSync },
+                    set: { settings.setRemoteSyncAutoSync($0) }
+                )
+            )
+            Text(L.str("settings.remoteSyncAutoSync.description"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } header: {
