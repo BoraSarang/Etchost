@@ -45,10 +45,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await AppModel.shared.syncDueRemoteFragments()
         }
         if !AppSettings.shared.openHostManagerAtLaunch {
+            // SwiftUI Window 생성 타이밍과 레이스 → 즉시 1회 + 지연 재시도로 닫기 보장.
+            // (생성 전이면 first가 nil이라 no-op이 되던 P1-1 수정)
             DispatchQueue.main.async {
-                NSApp.windows.first(where: { $0.identifier?.rawValue == "main" })?.close()
+                Self.closeMainWindowIfNeeded()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                Self.closeMainWindowIfNeeded()
             }
         }
+    }
+
+    private static func closeMainWindowIfNeeded() {
+        NSApp.windows.first(where: { $0.identifier?.rawValue == "main" })?.close()
     }
 
     /// 마지막 창을 닫아도 메뉴바 상주를 위해 종료하지 않는다.

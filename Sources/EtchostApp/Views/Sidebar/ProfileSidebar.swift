@@ -135,7 +135,7 @@ struct ProfileSidebar: View {
         let reapply = model.needsReapply(profile)
         return HStack(spacing: 8) {
             Circle()
-                .fill(dotColor(isActive: profile.isActive, reapply: reapply))
+                .fill(StatusDots.profile(isActive: profile.isActive, reapply: reapply))
                 .frame(width: 8, height: 8)
             VStack(alignment: .leading, spacing: 2) {
                 if renamingID == profile.id {
@@ -238,34 +238,34 @@ struct ProfileSidebar: View {
 
     // MARK: - 네트워크 목록
 
-private var tunnelList: some View {
-    List {
-        if model.tunnelManager.tunnels.isEmpty {
-            HStack(spacing: 8) {
-                Image(systemName: "network")
-                    .foregroundStyle(.secondary)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(L.str("sidebar.tunnel.none"))
-                        .font(.body)
-                    Text(L.str("sidebar.tunnel.scanHint"))
-                        .font(.caption)
+    private var tunnelList: some View {
+        List {
+            if model.tunnelManager.tunnels.isEmpty {
+                HStack(spacing: 8) {
+                    Image(systemName: "network")
                         .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(L.str("sidebar.tunnel.none"))
+                            .font(.body)
+                        Text(L.str("sidebar.tunnel.scanHint"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.vertical, 4)
+            } else {
+                ForEach(model.tunnelManager.tunnels) { tunnel in
+                    tunnelRow(tunnel)
                 }
             }
-            .padding(.vertical, 4)
-        } else {
-            ForEach(model.tunnelManager.tunnels) { tunnel in
-                tunnelRow(tunnel)
-            }
         }
+        .listStyle(.sidebar)
     }
-    .listStyle(.sidebar)
-}
 
     private func tunnelRow(_ tunnel: ManagedTunnel) -> some View {
         HStack(spacing: 8) {
             Circle()
-                .fill(tunnelStatusColor(tunnel.status))
+                .fill(StatusDots.tunnel(tunnel.status))
                 .frame(width: 8, height: 8)
             VStack(alignment: .leading, spacing: 1) {
                 Text(tunnel.label)
@@ -279,16 +279,6 @@ private var tunnelList: some View {
             Spacer(minLength: 4)
         }
         .contentShape(Rectangle())
-    }
-
-    private func tunnelStatusColor(_ status: TunnelStatus) -> Color {
-        switch status {
-        case .running: return .green
-        case .error: return .red
-        case .stopped: return .gray.opacity(0.5)
-        case .starting, .stopping: return .orange
-        default: return .gray
-        }
     }
 
     // MARK: - 상태카드
@@ -323,11 +313,6 @@ private var tunnelList: some View {
     private var headerText: String {
         guard model.activeProfile != nil else { return L.str("sidebar.status.noProfile") }
         return model.anyNeedsReapply ? L.str("sidebar.status.needsReapply") : L.str("sidebar.status.applied")
-    }
-
-    private func dotColor(isActive: Bool, reapply: Bool) -> Color {
-        if isActive { return reapply ? .orange : .green }
-        return reapply ? .orange.opacity(0.6) : .gray.opacity(0.5)
     }
 
     // MARK: - 생성·이름변경

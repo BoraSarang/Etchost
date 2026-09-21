@@ -106,7 +106,7 @@ struct MenuBarPopover: View {
                         } label: {
                             HStack(spacing: 6) {
                                 Circle()
-                                    .fill(dotColor(isActive: profile.isActive, reapply: reapply))
+                                    .fill(StatusDots.profile(isActive: profile.isActive, reapply: reapply))
                                     .frame(width: 7, height: 7)
                                 Text(profile.name)
                                     .font(.body)
@@ -195,7 +195,7 @@ struct MenuBarPopover: View {
     private func tunnelRow(_ tunnel: ManagedTunnel) -> some View {
         HStack(spacing: 6) {
             Circle()
-                .fill(tunnelStatusColor(tunnel.status))
+                .fill(StatusDots.tunnel(tunnel.status))
                 .frame(width: 7, height: 7)
             Text(tunnel.label)
                 .font(.body)
@@ -272,8 +272,7 @@ struct MenuBarPopover: View {
                         Label(L.str("menu.domain.copy"), systemImage: "doc.on.doc")
                     }
                     Button {
-                        guard let url = URL(string: domain) else { return }
-                        NSWorkspace.shared.open(url)
+                        NSWorkspace.shared.open(Self.url(for: domain))
                     } label: {
                         Label(L.str("menu.domain.open"), systemImage: "arrow.up.right.square")
                     }
@@ -329,9 +328,9 @@ struct MenuBarPopover: View {
     private var footer: some View {
         HStack(spacing: 12) {
             Button(L.str("menu.openMain")) {
+                // StatusItemController.handleOpenMainWindow가 팝오버 닫기 → 창 열기를 처리.
+                // (직접 openMain 중복 호출 제거: synchronous post로 먼저 처리됨)
                 NotificationCenter.default.post(name: .openMainWindow, object: nil)
-                MainWindowOpener.shared.openMain()
-                NSApp.activate(ignoringOtherApps: true)
             }
             Spacer()
             versionOrUpdateView
@@ -373,24 +372,18 @@ struct MenuBarPopover: View {
         tunnels.tunnels.filter { $0.status.isActive }.count
     }
 
-    private func tunnelStatusColor(_ status: TunnelStatus) -> Color {
-        switch status {
-        case .running: return .green
-        case .error: return .red
-        case .stopped: return .gray.opacity(0.5)
-        case .starting, .stopping: return .orange
-        default: return .gray
-        }
-    }
-
-    private func dotColor(isActive: Bool, reapply: Bool) -> Color {
-        if isActive { return reapply ? .orange : .green }
-        return reapply ? .orange.opacity(0.6) : .gray.opacity(0.5)
-    }
-
     private func reload() {
         tableRows = model.hostsTableRows
         isLive = model.lastHostsIsLive
+    }
+
+    /// 베어 도메인(스킴 없음)은 https:// 를 붙여 연다. (P2-1: 조용한 실패 수정)
+    static func url(for domain: String) -> URL {
+        let trimmed = domain.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.contains("://"), let url = URL(string: trimmed) {
+            return url
+        }
+        return URL(string: "https://\(trimmed)") ?? URL(string: "https://localhost")!
     }
 
     /// 팝오버가 열릴 때 메뉴 상태를 파일에 기록 (원격 진단용).

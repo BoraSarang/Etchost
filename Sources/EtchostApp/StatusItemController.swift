@@ -21,6 +21,12 @@ final class StatusItemController: NSObject {
             name: .showUpdateSheet,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleOpenMainWindow),
+            name: .openMainWindow,
+            object: nil
+        )
     }
 
     private func setupStatusItem() {
@@ -50,6 +56,15 @@ final class StatusItemController: NSObject {
         hosting.sizingOptions = [.preferredContentSize]
         popover.contentViewController = hosting
         popover.animates = true
+    }
+
+    /// 호스트 관리 열기 요청: transient 팝오버를 먼저 닫고 창을 연다.
+    /// (팝오버 열린 채 activate → 포커스 경합으로 새 창이 뒤에 가리던 P1-4 수정)
+    @objc private func handleOpenMainWindow() {
+        if popover.isShown {
+            popover.performClose(nil)
+        }
+        MainWindowOpener.shared.openMain()
     }
 
     /// 팝오버 하단 업데이트 표시에서 요청: 별도 윈도우로 업데이트 시트를 연다.
