@@ -14,18 +14,21 @@ let package = Package(
             name: "EtchostKit",
             dependencies: [],
             path: "Sources/EtchostKit",
+            exclude: [
+                "Resources/Info.plist",
+            ],
             resources: [
                 .process("Resources/ko.lproj"),
                 .process("Resources/en.lproj"),
-            ],
-            swiftSettings: [
-                .enableUpcomingFeature("InferSendableFromCaptures"),
             ]
         ),
         .testTarget(
             name: "EtchostKitTests",
             dependencies: ["EtchostKit"],
-            path: "Tests/EtchostKitTests"
+            path: "Tests/EtchostKitTests",
+            exclude: [
+                "Resources/Info.plist",
+            ]
         ),
     ]
 )

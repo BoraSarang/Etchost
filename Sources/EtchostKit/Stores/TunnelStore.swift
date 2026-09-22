@@ -18,7 +18,14 @@ public final class TunnelStore: @unchecked Sendable {
             guard let supportDir = FileManager.default.urls(
                 for: .applicationSupportDirectory, in: .userDomainMask).first
             else {
-                fatalError("Application Support directory not found")
+                // fatalError 대신 임시 디렉터리 폴백 (앱 크래시 방지)
+                NSLog("[Etchost] TunnelStore: Application Support directory not found — using temporary directory")
+                let appDir = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("Etchost", isDirectory: true)
+                try? FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
+                self.fileURL = appDir.appendingPathComponent("tunnels.json")
+                load()
+                return
             }
             let appDir = supportDir.appendingPathComponent("Etchost", isDirectory: true)
             try? FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
