@@ -35,9 +35,23 @@ public struct NetworkScanner: Sendable {
         9000: "HTTP", 8000: "HTTP", 9090: "HTTP", 3306: "MySQL", 5555: "adb"
     ]
 
-    private static let fingerprintPorts: Set<Int> = Set([
-        80, 443, 8443, 3000, 3001, 3002, 3003, 5173, 8080, 8081, 5000, 9000, 8000, 9090
-    ])
+    /// 스캔 결과 정렬: 1차 IP(옥텟 숫자 비교) → 2차 포트 ASC.
+    /// 문자열 정렬 함정("10.19.190.1" < "10.19.9.1") 회피.
+    public static func sortResults(_ results: [PortScanResult]) -> [PortScanResult] {
+        results.sorted {
+            if $0.ip != $1.ip { return compareIP($0.ip, $1.ip) }
+            return $0.port < $1.port
+        }
+    }
+
+    private static func compareIP(_ a: String, _ b: String) -> Bool {
+        let ao = a.split(separator: ".").compactMap { Int($0) }
+        let bo = b.split(separator: ".").compactMap { Int($0) }
+        if ao.count == 4, bo.count == 4, ao != bo {
+            for (x, y) in zip(ao, bo) where x != y { return x < y }
+        }
+        return a < b
+    }
 
     /// TLS 핸드셰이크가 필요한 포트. 평문 GET 실패 시 TLS로 재시도 (개발용 자체서명 인증서 허용).
     private static let tlsPorts: Set<Int> = [443, 8443]
@@ -268,8 +282,10 @@ public struct NetworkScanner: Sendable {
         onProgress?(candidates.count, candidates.count)
         let combined = arpHit + pinged
         if combined.isEmpty { return [] }
-        // 후보 순서 유지
-        let order = Dictionary(uniqueKeysWithValues: candidates.enumerated().map { ($1, $0) })
+        // 후보 순서 유지 (중복 후보가 있어도 크래시하지 않도록 후행 우선)
+        let order = candidates.enumerated().reduce(into: [String: Int]()) { result, pair in
+            result[pair.element] = pair.offset
+        }
         return combined.sorted { (order[$0] ?? 0) < (order[$1] ?? 0) }
     }
 
@@ -298,8 +314,11 @@ public struct NetworkScanner: Sendable {
                     defer { Task { await limiter.release() } }
                     let open = await isPortOpen(host: host, port: port, timeout: timeout)
                     guard open else { return nil }
+                    // 열린 포트는 번호와 무관하게 HTTP 핑거프린트 시도.
+                    // 평문 GET에 응답하면 Server 헤더 + <title>을 수집하고 서비스명을 HTTP로 교정.
+                    // (SSH/DB 등 비HTTP 서비스는 무응답 → 기존 매핑/기타 유지, 단일 GET이라 무해)
                     let probed: (info: String?, tls: Bool)
-                    if fingerprint, Self.fingerprintPorts.contains(port) {
+                    if fingerprint {
                         probed = await tlsAwareFingerprint(host: host, port: port, timeout: timeout)
                     } else {
                         probed = (nil, false)
@@ -332,9 +351,7 @@ public struct NetworkScanner: Sendable {
         }
 
         var seen: Set<String> = []
-        return pooled
-            .filter { seen.insert("\($0.ip):\($0.port)").inserted }
-            .sorted { ($0.port, $0.ip) < ($1.port, $1.ip) }
+        return Self.sortResults(pooled.filter { seen.insert("\($0.ip):\($0.port)").inserted })
     }
 
     public func scanLocalhost(ports: [Int] = NetworkScanner.commonPorts, timeout: TimeInterval = 0.35)

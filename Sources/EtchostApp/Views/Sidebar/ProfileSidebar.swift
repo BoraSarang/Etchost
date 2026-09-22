@@ -4,8 +4,12 @@ import SwiftUI
 /// 좌측 사이드바: 상태카드 + 프로필/프래그먼트 탭(50%씩) + 선택 탭 목록.
 struct ProfileSidebar: View {
     @EnvironmentObject var model: AppModel
+    /// 터널 상태점용 — AppModel이 중첩 @Published를 추적하지 않으므로 직접 구독.
+    @ObservedObject private var tunnelManager = TunnelManager.shared
     @State private var renamingID: UUID?
     @State private var renameText = ""
+    @State private var confirmDeleteProfile: Profile?
+    @State private var confirmDeleteFragment: Fragment?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -44,6 +48,31 @@ struct ProfileSidebar: View {
             }
         } message: {
             Text(L.str("editor.unsaved.message"))
+        }
+        .confirmationDialog(
+            L.str("sidebar.delete"),
+            isPresented: Binding(
+                get: { confirmDeleteProfile != nil || confirmDeleteFragment != nil },
+                set: { if !$0 { confirmDeleteProfile = nil; confirmDeleteFragment = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button(L.str("sidebar.delete"), role: .destructive) {
+                if let profile = confirmDeleteProfile {
+                    try? model.deleteProfile(profile.id)
+                }
+                if let fragment = confirmDeleteFragment {
+                    try? model.deleteFragment(fragment.id)
+                }
+                confirmDeleteProfile = nil
+                confirmDeleteFragment = nil
+            }
+            Button(L.str("editor.cancel"), role: .cancel) {
+                confirmDeleteProfile = nil
+                confirmDeleteFragment = nil
+            }
+        } message: {
+            Text(confirmDeleteProfile?.name ?? confirmDeleteFragment?.name ?? "")
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -169,13 +198,13 @@ struct ProfileSidebar: View {
             Button(L.str("sidebar.activateAndApply")) {
                 Task { await model.switchAndApply(profile.id) }
             }
-            .disabled(profile.isActive)
+            .disabled(profile.isActive || model.isApplying)
             Button(L.str("sidebar.rename")) {
                 renamingID = profile.id
                 renameText = profile.name
             }
             Button(L.str("sidebar.delete"), role: .destructive) {
-                try? model.deleteProfile(profile.id)
+                confirmDeleteProfile = profile
             }
             .disabled(profile.isActive)
         }
@@ -222,7 +251,7 @@ struct ProfileSidebar: View {
                 renameText = fragment.name
             }
             Button(L.str("sidebar.delete"), role: .destructive) {
-                try? model.deleteFragment(fragment.id)
+                confirmDeleteFragment = fragment
             }
         }
     }
@@ -240,7 +269,7 @@ struct ProfileSidebar: View {
 
     private var tunnelList: some View {
         List {
-            if model.tunnelManager.tunnels.isEmpty {
+            if tunnelManager.tunnels.isEmpty {
                 HStack(spacing: 8) {
                     Image(systemName: "network")
                         .foregroundStyle(.secondary)
@@ -254,7 +283,7 @@ struct ProfileSidebar: View {
                 }
                 .padding(.vertical, 4)
             } else {
-                ForEach(model.tunnelManager.tunnels) { tunnel in
+                ForEach(tunnelManager.tunnels) { tunnel in
                     tunnelRow(tunnel)
                 }
             }
@@ -318,21 +347,38 @@ struct ProfileSidebar: View {
     // MARK: - 생성·이름변경
 
     private func createProfile() {
-        let name = L.str("sidebar.newProfile", model.profiles.count + 1)
-        try? model.createProfile(name: name)
-        if let fresh = model.profiles.first(where: { $0.name == name }) {
-            renamingID = fresh.id
-            renameText = fresh.name
-        }
+        do {
+            let created = try model.createProfile(name: uniqueDefaultName(
+                formatKey: "sidebar.newProfile",
+                existing: model.profiles.map(\.name),
+                start: model.profiles.count + 1
+            ))
+            renamingID = created.id
+            renameText = created.name
+        } catch {}
     }
 
     private func createFragment() {
-        let name = L.str("sidebar.newFragment", model.fragments.count + 1)
-        try? model.createFragment(name: name)
-        if let fresh = model.fragments.first(where: { $0.name == name }) {
-            renamingID = fresh.id
-            renameText = fresh.name
+        do {
+            let created = try model.createFragment(name: uniqueDefaultName(
+                formatKey: "sidebar.newFragment",
+                existing: model.fragments.map(\.name),
+                start: model.fragments.count + 1
+            ))
+            renamingID = created.id
+            renameText = created.name
+        } catch {}
+    }
+
+    /// 삭제 공백으로 `count+1` 포맷이 기존 이름과 충돌하면 충돌 해제까지 증가시킨다.
+    private func uniqueDefaultName(formatKey: String, existing: [String], start: Int) -> String {
+        var n = start
+        var name = L.str(formatKey, n)
+        while existing.contains(name) {
+            n += 1
+            name = L.str(formatKey, n)
         }
+        return name
     }
 
     private func commitProfileRename(_ profile: Profile) {

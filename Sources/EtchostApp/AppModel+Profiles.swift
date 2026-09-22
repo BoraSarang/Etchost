@@ -4,11 +4,13 @@ import Foundation
 // MARK: - Profile CRUD
 
 extension AppModel {
-    public func createProfile(name: String) throws {
+    @discardableResult
+    public func createProfile(name: String) throws -> Profile {
         let profile = try store.create(name: name)
         refresh()
         sidebarSection = .profiles
         selectedProfileID = profile.id
+        return profile
     }
 
     public func renameProfile(_ id: UUID, to name: String) throws {

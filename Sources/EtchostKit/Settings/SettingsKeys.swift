@@ -7,6 +7,8 @@ public enum SettingsKeys {
     public static let autoRebookTunnels = "settings.autoRebookTunnels"
     public static let customScanPorts = "settings.customScanPorts"
     public static let defaultScanPorts = "settings.defaultScanPorts"
+    /// 사용자가 기본 포트 목록을 직접 편집한 적 있는지 (전체 삭제 → 빈 목록 유지 구분용).
+    public static let defaultScanPortsCustomized = "settings.defaultScanPortsCustomized"
     public static let openHostManagerAtLaunch = "settings.openHostManagerAtLaunch"
     public static let updateCheckFrequency = "settings.updateCheckFrequency"
     public static let updateLastChecked = "settings.updateLastChecked"

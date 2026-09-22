@@ -1,4 +1,16 @@
+import CryptoKit
 import Foundation
+
+extension SHA256 {
+    /// UTF-8 문자열의 SHA-256 16진수 다이제스트.
+    static func hex(of string: String) -> String {
+        digestHex(SHA256.hash(data: Data(string.utf8)))
+    }
+
+    private static func digestHex(_ digest: SHA256Digest) -> String {
+        digest.map { String(format: "%02x", $0) }.joined()
+    }
+}
 
 /// 합성기: Profile 본문 + 토글된 프래그먼트 → /etc/hosts 텍스트.
 /// Source 합성은 다음 단계에서 `compose(profile:fragments:sources:)`로 확장.
@@ -72,22 +84,18 @@ public struct Composer: Sendable {
 
     /// stale 판정용 지문. 본문 + 토글 ID + 참조 프래그먼트 내용을 모두 포함 —
     /// 프래그먼트 편집/토글만으로 참조 프로필 전체가 `적용 필요`가 됨.
-    /// 대용량 프래그먼트에서도 거대 문자열을 만들지 않고 항목 단위로 해싱한다.
-    /// 주의: 해싱 방식 변경으로 기존 appliedHash와 불일치 → 업데이트 1회성 전체 stale (다시 적용 필요).
+    /// CryptoKit SHA256로 결정적 — `Hasher`(실행마다 랜덤 시드)와 달리 재시작 후에도 일치해야 한다.
+    /// 주의: 해싱 방식이 바뀌면 기존 appliedHash와 1회 불일치 → 전체 stale 후 재 적용 시 재시작에도 유지.
     public func fingerprint(profile: Profile, fragments: [Fragment] = []) -> String {
-        var hasher = Hasher()
-        hasher.combine("composer:baseline-v2")
-        hasher.combine(profile.currentHash)
-        hasher.combine(profile.fragmentIDs.sorted().map(\.uuidString).joined(separator: ","))
+        var parts: [String] = ["composer:baseline-v3", profile.currentHash]
+        parts.append(profile.fragmentIDs.sorted().map(\.uuidString).joined(separator: ","))
         for fragment in referencedFragments(profile: profile, fragments: fragments) {
-            hasher.combine(fragment.id.uuidString)
+            parts.append(fragment.id.uuidString)
             for entry in fragment.entries {
-                hasher.combine(entry.ip)
-                hasher.combine(entry.domain)
-                hasher.combine(entry.comment ?? "")
-                hasher.combine(entry.isEnabled)
+                parts.append(contentsOf: [entry.ip, entry.domain, entry.comment ?? "", entry.isEnabled ? "1" : "0"])
             }
         }
-        return String(hasher.finalize(), radix: 16)
+        // 필드 경계를 확실히 끊어 연결 공격(ip="a b" 등)을 막는다.
+        return SHA256.hex(of: parts.joined(separator: "\u{1E}"))
     }
 }

@@ -46,6 +46,7 @@ struct ProfileEditor: View {
                 canApply: !model.isApplying && !anyInvalid,
                 applyTitle: profile.isActive ? L.str("editor.apply") : L.str("editor.activateAndApply"),
                 error: model.applyError,
+                message: saveMessage,
                 onCancel: {
                     syncFromProfile()
                     model.cancelEdit(profile.id)
@@ -61,7 +62,11 @@ struct ProfileEditor: View {
         .padding(16)
         .onAppear {
             syncFromProfile()
-            model.requestEditorSave = { saveIfDirty(); return !isDirty }
+            model.requestEditorSave = {
+                saveIfDirty()
+                // 저장 후 저장소 상태로 재판정 — 캡처 시점 스냅샷의 isDirty를 신뢰하지 않는다.
+                return !model.editorDirty && storeIsClean()
+            }
         }
         .onDisappear {
             model.requestEditorSave = nil
@@ -119,6 +124,13 @@ struct ProfileEditor: View {
         if isDirty, !anyInvalid { save() }
     }
 
+    /// 저장 후 스토어 원본과 대조해 실제로 깨끗한지 확인 (구조체 캡처 고치용).
+    private func storeIsClean() -> Bool {
+        guard let stored = model.store.get(profile.id) else { return false }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed == stored.name && entries == stored.entries
+    }
+
     private func save() {
         guard !anyInvalid else {
             saveMessage = L.str("editor.invalidSave")
@@ -131,6 +143,7 @@ struct ProfileEditor: View {
             }
             try model.updateEntries(profile.id, entries: entries)
             saveMessage = L.str("editor.saved.profile")
+            model.editorDirty = false
         } catch {
             saveMessage = model.describe(error)
         }

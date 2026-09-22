@@ -31,13 +31,16 @@ struct HostEntryListView: View {
                 cappedSampleView
             } else {
                 List {
+                    // 인덱스가 아니라 HostEntry.id 기준 identity — 위쪽 행 삭제 시 포커스/바인딩이 행과 함께 유지된다.
                     ForEach(entries.indices, id: \.self) { idx in
+                        let entryID = entries[idx].id
                         HostEntryRow(
-                            entry: $entries[idx],
-                            autoFocus: entries[idx].id == pendingFocusID,
+                            entry: binding(for: entryID),
+                            autoFocus: entryID == pendingFocusID,
                             isDuplicate: duplicateCounts[entries[idx].domain.lowercased(), default: 0] > 1,
-                            onDelete: { entries.remove(at: idx) }
+                            onDelete: { removeEntry(id: entryID) }
                         )
+                        .id(entryID)
                     }
                     .onMove { from, to in
                         entries.move(fromOffsets: from, toOffset: to)
@@ -195,6 +198,22 @@ struct HostEntryListView: View {
         DispatchQueue.main.async {
             pendingFocusID = nil
         }
+    }
+
+    /// id 기준 바인딩: 삭제로 인덱스가 밀려도 같은 행을 가리키게 한다.
+    private func binding(for id: UUID) -> Binding<HostEntry> {
+        Binding(
+            get: { entries.first(where: { $0.id == id }) ?? HostEntry(ip: "", domain: "") },
+            set: { newValue in
+                if let idx = entries.firstIndex(where: { $0.id == id }) {
+                    entries[idx] = newValue
+                }
+            }
+        )
+    }
+
+    private func removeEntry(id: UUID) {
+        entries.removeAll { $0.id == id }
     }
 }
 

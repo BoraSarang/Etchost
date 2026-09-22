@@ -21,6 +21,10 @@ struct NetworkView: View {
     @State private var scanElapsed: TimeInterval?
     @State private var cacheInfo: String?
     @State private var logTunnelID: TunnelLogSelection?
+    /// 진행 중인 스캔 — 탭 전환 시 취소해 이중 스캔/캐시 경합을 막는다.
+    @State private var scanTask: Task<Void, Never>?
+    /// 스캔 중 선택했던 키 (ip:port) — 재스캔 머지 후에도 선택 복원용.
+    @State private var selectedResultKey: String?
 
     private struct CachedScan: Codable {
         let target: String
@@ -60,17 +64,33 @@ struct NetworkView: View {
     }
 
     var body: some View {
-        VStack(spacing: 12) {
-            cloudflaredBanner
-            ipChangeBanner
-            Divider()
-            scannerSection
-            Divider()
-            tunnelSection
+        ScrollView {
+            VStack(spacing: 12) {
+                cloudflaredBanner
+                ipChangeBanner
+                Divider()
+                scannerSection
+                Divider()
+                tunnelSection
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .padding(16)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(16)
         .onAppear { loadCachedScanIfEmpty() }
+        .onChange(of: selectedResult) { _, newID in
+            // 선택 변경 시 키(ip:port) 저장 — 재스캔 머지로 UUID가 바뀌어도 복원 가능.
+            selectedResultKey = newID.flatMap { id in
+                scanResults.first { $0.id == id }.map { "\($0.ip):\($0.port)" }
+            }
+        }
+        .onDisappear {
+            // 탭 전환 시 스캔 정리 — 미정리 Task가 사후에 상태를 쓰면 이중 스캔/캐시 경합 발생.
+            scanTask?.cancel()
+            scanTask = nil
+            isScanning = false
+            scanStageAlive = false
+        }
         .sheet(item: $logTunnelID) { selection in
             TunnelLogSheet(tunnels: tunnels, id: selection.tunnelID)
         }
@@ -266,6 +286,15 @@ if let change = tunnels.lastIPChange {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
+                    if !isScanning {
+                        Button {
+                            clearScanResults()
+                        } label: {
+                            Label(L.str("network.scan.clear"), systemImage: "trash")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
                     Button(L.str("network.scan.createTunnel")) {
                         createTunnel(for: result)
                     }
@@ -276,6 +305,15 @@ if let change = tunnels.lastIPChange {
                         ? L.str("error.cloudflaredNotInstalled")
                         : L.str("network.scan.createTunnel"))
                 } else {
+                    if !scanResults.isEmpty, !isScanning {
+                        Button {
+                            clearScanResults()
+                        } label: {
+                            Label(L.str("network.scan.clear"), systemImage: "trash")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
                     Spacer()
                     Text(L.str("network.scan.selectHint"))
                         .font(.caption)
@@ -324,6 +362,10 @@ if let change = tunnels.lastIPChange {
         switch mode {
         case .defaultPorts:
             ports = AppSettings.shared.effectiveDefaultScanPorts
+            guard !ports.isEmpty else {
+                scanError = L.str("network.scan.noDefaultPorts")
+                return
+            }
         case .custom:
             // 비우면常用 포트 전체(1~10000). 49152 위는 ephemeral이라 제외.
             // LAN 전체에선 tooMany 가드로 차단됨.
@@ -358,6 +400,7 @@ if let change = tunnels.lastIPChange {
         }
         scanError = nil
         isScanning = true
+        scanTask?.cancel()
         // 누적 머지: 스캔 대상 호스트는 새 결과로 교체, 대상 밖은 유지.
         let previous = scanResults
         let scannedSet = Set(hosts)
@@ -367,7 +410,7 @@ if let change = tunnels.lastIPChange {
         let started = Date()
         // 백그라운드 스캔: 무거운 작업이 메인스레드를 막지 않음.
         // UI 발행은 0.5초 배치로 스로틀 (행걸림/스크롤 버벅 방지).
-        Task {
+        scanTask = Task {
             // 같은 네트워크 전체면 생존 필터 먼저 (20초 → 2~3초).
             // 1단계 진행률(생존 확인)도 표시해서 0% 정체처럼 보이지 않게.
             var targets = hosts
@@ -384,6 +427,7 @@ if let change = tunnels.lastIPChange {
                         scanTotal = total
                     } }
                 }
+                if Task.isCancelled { finishCancelledScan(); return }
                 if !alive.isEmpty {
                     targets = alive
                     let total = alive.count * ports.count
@@ -394,7 +438,12 @@ if let change = tunnels.lastIPChange {
                     }
                 } else {
                     timeout = 0.35
-                    await MainActor.run { scanStageAlive = false }
+                    // 생존 0건 → 포트 스캔 total로 갱신하지 않으면 hosts.count 유지 상태로 100% 초과.
+                    await MainActor.run {
+                        scanStageAlive = false
+                        scanCompleted = 0
+                        scanTotal = targets.count * ports.count
+                    }
                 }
             }
             let drain = ScanDrain(seen: Set(previous.map { "\($0.ip):\($0.port)" }))
@@ -408,10 +457,14 @@ if let change = tunnels.lastIPChange {
             } onProgress: { progress in
                 let batch = drain.popBatchIfDue(interval: 0.5)
                 Task { await MainActor.run {
-                    if !batch.isEmpty { scanResults.append(contentsOf: batch) }
+                    // 스캔 중에도 IP → 포트 순서 유지 (같은 호스트끼리 모이게).
+                    if !batch.isEmpty { scanResults = NetworkScanner.sortResults(scanResults + batch) }
                     scanCompleted = progress.completed
+                    // alive 단계에서 포트 total로 넘어간 뒤에도 싱크 유지.
+                    scanTotal = progress.total
                 } }
             }
+            if Task.isCancelled { finishCancelledScan(); return }
             let tail = drain.popAll()
             let elapsed = Date().timeIntervalSince(started)
             let ownIP = NetworkScanner.localIPv4Addresses().first
@@ -421,22 +474,41 @@ if let change = tunnels.lastIPChange {
                 logScanDiagnostics(hosts: targets, results: results, started: started, ownIP: ownIP)
                 // 재스캔 머지: 스캔한 호스트 중 새 결과에 없으면(닫힘) 삭제.
                 let kept = previous.filter { !scannedSet.contains($0.ip) }
-                // 포트 번호 ASC 정렬 (포트 → IP).
-                let merged = (kept + results).sorted { ($0.port, $0.ip) < ($1.port, $1.ip) }
+                // 1차 IP → 2차 포트 ASC 정렬.
+                let merged = NetworkScanner.sortResults(kept + results)
                 var dedup: Set<String> = []
                 scanResults = merged.filter { dedup.insert("\($0.ip):\($0.port)").inserted }
+                // 진행 중 선택 행이 머지로 새 UUID를 받아도 키로 복원.
+                if let key = selectedResultKey {
+                    selectedResult = scanResults.first { "\($0.ip):\($0.port)" == key }?.id
+                }
                 _ = tail
                 lastTarget = targets.count > 1 ? L.str("network.scan.lastTarget.lan", targets.count) : targets.first
                 cacheInfo = nil
                 saveCachedScan(hosts: targets, ownIP: ownIP, results: scanResults)
                 isScanning = false
+                scanTask = nil
             }
+        }
+    }
+
+    private func finishCancelledScan() {
+        Task { @MainActor in
+            isScanning = false
+            scanStageAlive = false
+            scanTask = nil
         }
     }
 
     private var percentLabel: String {
         guard scanTotal > 0 else { return "–" }
-        return "\(Int(Double(scanCompleted) / Double(scanTotal) * 100))%"
+        let ratio = Double(scanCompleted) / Double(scanTotal)
+        return "\(Int(min(max(ratio, 0), 1) * 100))%"
+    }
+
+    private var selectedScanResult: PortScanResult? {
+        guard let selectedResult else { return nil }
+        return scanResults.first { $0.id == selectedResult }
     }
 
     // MARK: - 스캔 결과 캐시
@@ -461,6 +533,18 @@ if let change = tunnels.lastIPChange {
         formatter.dateFormat = "MM-dd HH:mm"
         let time = formatter.string(from: cached.scannedAt)
         cacheInfo = L.str("network.scan.cache", time, cached.ownIP)
+    }
+
+    /// 스캔 결과 목록 초기화 (화면 + 저장된 캐시 함께 삭제).
+    private func clearScanResults() {
+        scanResults = []
+        selectedResult = nil
+        selectedResultKey = nil
+        lastTarget = nil
+        scanElapsed = nil
+        cacheInfo = nil
+        scanError = nil
+        try? FileManager.default.removeItem(at: scanCacheURL)
     }
 
     private func saveCachedScan(hosts: [String], ownIP: String?, results: [PortScanResult]) {
@@ -676,11 +760,6 @@ if let change = tunnels.lastIPChange {
 }
 
 private extension NetworkView {
-    var selectedScanResult: PortScanResult? {
-        guard let id = selectedResult else { return nil }
-        return scanResults.first { $0.id == id }
-    }
-
     func copyToPasteboard(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)

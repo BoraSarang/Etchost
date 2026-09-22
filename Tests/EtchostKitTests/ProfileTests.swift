@@ -91,6 +91,23 @@ struct ProfileHashTests {
         #expect(profile.fragmentIDs == [])
         #expect(profile.appliedHash == nil)
     }
+
+    @Test("SHA256 지문은 실행 간 결정적 (Hasher 아님)")
+    func fingerprintDeterministic() {
+        var p = Profile(name: "Dev", entries: [HostEntry(ip: "127.0.0.1", domain: "a.test")])
+        let frag = Fragment(name: "Docker", entries: [HostEntry(ip: "127.0.0.1", domain: "db.test")])
+        p.toggleFragment(frag.id)
+        let first = Composer.shared.fingerprint(profile: p, fragments: [frag])
+        let second = Composer.shared.fingerprint(profile: p, fragments: [frag])
+        #expect(first == second)
+        #expect(first.count == 64) // SHA-256 hex
+        // 필드 경계 구분자로 연결 공격 방지: ip/domain 분리 없이 이어붙이면 충돌 가능.
+        var a = Profile(name: "X", entries: [HostEntry(ip: "a", domain: "bc.test")])
+        var b = Profile(name: "X", entries: [HostEntry(ip: "ab", domain: "c.test")])
+        a.markApplied(fingerprint: Composer.shared.fingerprint(profile: a))
+        b.markApplied(fingerprint: Composer.shared.fingerprint(profile: b))
+        #expect(a.appliedHash != b.appliedHash)
+    }
 }
 
 @Suite("ProfileStore")
@@ -162,6 +179,48 @@ struct ProfileStoreTests {
         #expect(store.all().count == 1) // 시드 복구
         let corruptFiles = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
         #expect(corruptFiles.contains { $0.lastPathComponent.hasPrefix("profiles.json.corrupt") })
+    }
+
+    @Test("중복 UUID JSON은 크래시 없이 후행 항목 유지")
+    func duplicateUUIDKeepsLast() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("profiles.json")
+        let id = UUID().uuidString
+        let json = """
+        [
+          {"id":"\(id)","name":"First","entries":[],"order":0,"isActive":true,"createdAt":0,"updatedAt":0},
+          {"id":"\(id)","name":"Last","entries":[],"order":1,"isActive":false,"createdAt":0,"updatedAt":0}
+        ]
+        """
+        try json.write(to: url, atomically: true, encoding: .utf8)
+        let store = ProfileStore(fileURL: url)
+        #expect(store.all().count == 1)
+        #expect(store.all().first?.name == "Last")
+        #expect(store.all().first?.id.uuidString == id)
+    }
+
+    @Test("저장 실패 시 메모리 롤백 (saveFailure 기록)")
+    func saveFailureRollsBack() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+            try? FileManager.default.removeItem(at: dir)
+        }
+        let url = dir.appendingPathComponent("profiles.json")
+        let store = ProfileStore(fileURL: url)
+        let active = try #require(store.active())
+        // 부모 디렉터기를 읽기 전용으로 만들어 atomic 쓰기를 실패시킨다.
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        var updated = active
+        updated.updateName("Renamed")
+        #expect(throws: (any Error).self) {
+            try store.update(updated)
+        }
+        #expect(store.saveFailure != nil)
+        #expect(store.get(active.id)?.name == active.name) // 롤백
     }
 }
 

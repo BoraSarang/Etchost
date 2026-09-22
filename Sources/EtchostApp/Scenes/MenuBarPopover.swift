@@ -11,7 +11,11 @@ struct MenuBarPopover: View {
     @State private var isLive = true
     @State private var hoveredDomain: String?
     @State private var dismissWorkItem: DispatchWorkItem?
-    private let buildTag = "v0.6.1"
+
+    /// Info.plist 버전 (하드코딩 금지 — 릴리스 시 항상 최신).
+    private var buildTag: String {
+        "v\(AppSettings.shared.appBundleVersion)"
+    }
 
     init() {
         _tunnels = ObservedObject(wrappedValue: TunnelManager.shared)

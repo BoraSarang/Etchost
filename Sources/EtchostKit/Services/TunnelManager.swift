@@ -330,16 +330,17 @@ public final class TunnelManager: ObservableObject {
         }
     }
 
-    /// 새 IP로 모든 터널 갱신 + 실행 중 터널 재시작.
-    public func updateAllForIPChange(_ newIP: String) {
+    /// 새 IP로 터널 갱신. 이전 로컬 IP를 가리키던 터널만 새 IP로 옮기고 재시작한다.
+    /// 원격 호스트(다른 장비 IP)를 가리키는 터널은 건드리지 않는다.
+    public func updateAllForIPChange(old: String?, new: String) {
+        // 이전 IP를 모르면 어떤 터널이 영향권인지 판단 불가 → 오갱신 방지로 스킵.
+        guard let old else { return }
         for id in sessions.keys {
-            var session = sessions[id]
-            session?.tunnel.ip = newIP
+            guard var session = sessions[id], session.tunnel.ip == old else { continue }
+            session.tunnel.ip = new
             sessions[id] = session
-            if let tunnel = session?.tunnel {
-                try? store.update(tunnel)
-            }
-            if session?.status.isActive == true {
+            try? store.update(session.tunnel)
+            if session.status.isActive {
                 stopTunnel(id)
                 startTunnel(id)
             }
@@ -349,7 +350,7 @@ public final class TunnelManager: ObservableObject {
 
     private func handleIPChange(_ change: IPMonitor.Change) {
         lastIPChange = change
-        updateAllForIPChange(change.new)
+        updateAllForIPChange(old: change.old, new: change.new)
     }
 
     // MARK: - 출력/종료
