@@ -6,6 +6,7 @@ import Foundation
 extension AppModel {
     /// 메뉴바 클릭 시: setActive + /etc/hosts 쓰기. 암호 프롬프트 1회.
     public func switchAndApply(_ id: UUID) async {
+        guard !isApplying else { return }
         do {
             try store.setActive(id)
             refresh()
@@ -17,6 +18,7 @@ extension AppModel {
     }
 
     public func applyActiveProfile() async {
+        guard !isApplying else { return }
         guard let active = store.active() else {
             applyError = L.str("error.noActiveProfile")
             return

@@ -8,6 +8,7 @@ public final class ProfileStore: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.borasarang.etchost.profileStore", attributes: .concurrent)
     private var profiles: [UUID: Profile] = [:]
     private let fileURL: URL
+    private var lastSaveError: Error?
 
     public init(fileURL: URL? = nil) {
         if let fileURL {
@@ -36,25 +37,52 @@ public final class ProfileStore: @unchecked Sendable {
             do {
                 let data = try Data(contentsOf: fileURL)
                 let decoded = try JSONDecoder().decode([Profile].self, from: data)
-                profiles = Dictionary(uniqueKeysWithValues: decoded.map { ($0.id, $0) })
+                // 중복 UUID가 있어도 크래시하지 않도록 후행 항목 유지 (수동 편집/복원 방어)
+                profiles = decoded.reduce(into: [:]) { result, profile in
+                    if result[profile.id] != nil {
+                        NSLog("[Etchost] ProfileStore: duplicate id \(profile.id) — keeping last")
+                    }
+                    result[profile.id] = profile
+                }
             } catch {
-                // Fail-closed: 손상본 보존 후 빈 상태로 시작 (덮어쓰기 금지)
-                let corruptURL = fileURL.appendingPathExtension("corrupt-\(Int(Date().timeIntervalSince1970))")
-                try? FileManager.default.moveItem(at: fileURL, to: corruptURL)
+                // Fail-closed: 손상본 보존 후 빈 상태로 시작 (원본을 먼저 백업)
+                quarantineCorruptFile()
                 profiles = [:]
             }
         }
     }
 
-    private func saveLocked() {
+    /// 손상본을 `.corrupt-<ts>`로 이동. 이동 실패 시 복사+삭제로 대체하여
+    /// 이후 시드/저장이 원본을 덮어써도 백업이 남도록 한다.
+    private func quarantineCorruptFile() {
+        let corruptURL = fileURL.appendingPathExtension("corrupt-\(Int(Date().timeIntervalSince1970))")
+        do {
+            try FileManager.default.moveItem(at: fileURL, to: corruptURL)
+            return
+        } catch {
+            do {
+                let data = try Data(contentsOf: fileURL)
+                try data.write(to: corruptURL)
+                try FileManager.default.removeItem(at: fileURL)
+            } catch {
+                NSLog("[Etchost] ProfileStore: corrupt quarantine failed for \(fileURL.path): \(error)")
+            }
+        }
+    }
+
+    /// 디스크 쓰기. 실패 시 `lastSaveError` 기록 후 throw — 메모리 변경은 호출부에서 롤백한다.
+    private func saveLocked() throws {
         let ordered = profiles.values.sorted { $0.order < $1.order }
         do {
             let data = try JSONEncoder().encode(ordered)
             let tmpURL = fileURL.appendingPathExtension("tmp")
             try data.write(to: tmpURL, options: .atomic)
             _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: tmpURL)
+            lastSaveError = nil
         } catch {
-            // 저장 실패는 조용히 무시 (호출부가 throw하지 않는 reorder 경로 보호)
+            lastSaveError = error
+            NSLog("[Etchost] ProfileStore: save failed for \(fileURL.path): \(error)")
+            throw EtchostError.ioError("profiles.json: \(error.localizedDescription)")
         }
     }
 
@@ -72,12 +100,12 @@ public final class ProfileStore: @unchecked Sendable {
                     isActive: true
                 )
                 profiles[seed.id] = seed
-                saveLocked()
+                try? saveLocked()
             } else if !profiles.values.contains(where: { $0.isActive }) {
                 if let key = profiles.values.min(by: { $0.order < $1.order })?.id, var first = profiles[key] {
                     first.isActive = true
                     profiles[key] = first
-                    saveLocked()
+                    try? saveLocked()
                 }
             }
         }
@@ -97,6 +125,11 @@ public final class ProfileStore: @unchecked Sendable {
         queue.sync { profiles.values.first { $0.isActive } }
     }
 
+    /// 마지막 저장 실패 원인 (nil이면 최근 저장 성공).
+    public var saveFailure: Error? {
+        queue.sync { lastSaveError }
+    }
+
     // MARK: - Writes
 
     @discardableResult
@@ -110,14 +143,19 @@ public final class ProfileStore: @unchecked Sendable {
             let nextOrder = (profiles.values.map(\.order).max() ?? -1) + 1
             let profile = Profile(name: trimmed, entries: entries, order: nextOrder)
             profiles[profile.id] = profile
-            saveLocked()
+            do {
+                try saveLocked()
+            } catch {
+                profiles.removeValue(forKey: profile.id)
+                throw error
+            }
             return profile
         }
     }
 
     public func update(_ profile: Profile) throws {
         try queue.sync(flags: .barrier) {
-            guard profiles[profile.id] != nil else {
+            guard let previous = profiles[profile.id] else {
                 throw EtchostError.profileNotFound(profile.id)
             }
             let trimmed = profile.name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -128,7 +166,12 @@ public final class ProfileStore: @unchecked Sendable {
             var next = profile
             next.name = trimmed
             profiles[profile.id] = next
-            saveLocked()
+            do {
+                try saveLocked()
+            } catch {
+                profiles[profile.id] = previous
+                throw error
+            }
         }
     }
 
@@ -141,7 +184,12 @@ public final class ProfileStore: @unchecked Sendable {
                 throw EtchostError.cannotDeleteActiveProfile
             }
             profiles.removeValue(forKey: id)
-            saveLocked()
+            do {
+                try saveLocked()
+            } catch {
+                profiles[id] = profile
+                throw error
+            }
         }
     }
 
@@ -150,16 +198,23 @@ public final class ProfileStore: @unchecked Sendable {
             guard profiles[id] != nil else {
                 throw EtchostError.profileNotFound(id)
             }
+            let snapshot = profiles
             for (key, var profile) in profiles {
                 profile.isActive = (key == id)
                 profiles[key] = profile
             }
-            saveLocked()
+            do {
+                try saveLocked()
+            } catch {
+                profiles = snapshot
+                throw error
+            }
         }
     }
 
     public func reorder(_ ids: [UUID]) {
         queue.sync(flags: .barrier) {
+            let snapshot = profiles
             for (index, id) in ids.enumerated() {
                 if var profile = profiles[id] {
                     profile.order = index
@@ -173,7 +228,11 @@ public final class ProfileStore: @unchecked Sendable {
                 next.order = ids.count + offset
                 profiles[profile.id] = next
             }
-            saveLocked()
+            do {
+                try saveLocked()
+            } catch {
+                profiles = snapshot
+            }
         }
     }
 }

@@ -125,6 +125,7 @@
 "network.scan.aliveChecking" = "생존 확인 %1$d/%2$d";
 "network.scan.cache" = "캐시(%1$@, %2$@)";
 "network.scan.checking" = "검사 %1$d/%2$d";
+"network.scan.clear" = "목록 지우기";
 "network.scan.createTunnel" = "터널 만들기";
 "network.scan.custom" = "지정 IP";
 "network.scan.found" = "발견 %1$d개 포트";
@@ -135,6 +136,7 @@
 "network.scan.lanError" = "연결된 로컬 네트워크가 없습니다. Wi-Fi/이더넷 연결을 확인하세요.";
 "network.scan.lastTarget.lan" = "LAN %1$d개 호스트";
 "network.scan.localhost" = "로컬 스캔";
+"network.scan.noDefaultPorts" = "기본 포트 목록이 비어 있습니다. 설정에서 포트를 추가하거나 지정/대역 모드를 쓰세요.";
 "network.scan.ports.customPlaceholder" = "예: 80,443,3003 (비우면 1~10000 전체)";
 "network.scan.ports.empty" = "포트를 입력하세요.";
 "network.scan.ports.mode.custom" = "지정 포트";
@@ -201,6 +203,7 @@
 "settings.scanPorts.applied" = "적용 포트 %1$d개: %2$@";
 "settings.scanPorts.default" = "기본 포트 %1$d개를 사용합니다.";
 "settings.scanPorts.defaultsTitle" = "기본 포트 목록 (%1$d개)";
+"settings.scanPorts.empty" = "목록이 비어 있습니다. 아래에서 포트를 추가하세요.";
 "settings.scanPorts.invalid" = "범위 밖 포트나 잘못된 값이 포함됐습니다 (1~65535).";
 "settings.scanPorts.placeholder" = "1회성 override (비우면 아래 기본값, 예: 80,443,8000-8100)";
 "settings.scanPorts.reset" = "기본값 복원";

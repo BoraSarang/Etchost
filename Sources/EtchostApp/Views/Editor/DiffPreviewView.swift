@@ -19,11 +19,10 @@ struct DiffPreviewView: View {
         newText.reduce(into: 1) { count, ch in if ch == "\n" { count += 1 } }
     }
 
-    private var lines: [HostsDiffLine] {
-        HostsDiffer.diff(old: oldText, new: newText, contextLines: 1)
-    }
-
     var body: some View {
+        // body 1회에 diff 1회만 — 요약/목록이各自 diff를 부르던 중복 계산 제거.
+        let lines = isSkipped ? [] : HostsDiffer.diff(old: oldText, new: newText, contextLines: 1)
+        let summary = HostsDiffer.summary(of: lines)
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Label(L.str("editor.diff.title"), systemImage: "doc.on.doc")
@@ -34,42 +33,43 @@ struct DiffPreviewView: View {
                     Text(L.str("editor.diff.skipped", lineCount))
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                } else if summary.isEmpty {
+                    Text(L.str("editor.diff.empty"))
+                        .font(.caption)
+                        .foregroundStyle(.green)
                 } else {
-                    let summary = HostsDiffer.summary(of: HostsDiffer.diff(
-                        old: oldText, new: newText, contextLines: 0))
-                    if summary.isEmpty {
-                        Text(L.str("editor.diff.empty"))
-                            .font(.caption)
-                            .foregroundStyle(.green)
-                    } else {
-                        Text(L.str("editor.diff.summary", summary.added, summary.removed))
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
-                    }
+                    Text(L.str("editor.diff.summary", summary.added, summary.removed))
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
                 }
             }
-            if !isSkipped, !lines.isEmpty {
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(lines.prefix(Self.maxRows)) { line in
-                        HStack(alignment: .top, spacing: 6) {
-                            Text(line.kind == .added ? "+" : line.kind == .removed ? "−" : " ")
-                                .font(.caption.monospaced())
-                                .foregroundStyle(line.kind == .added ? .green : line.kind == .removed ? .red : .secondary)
-                                .frame(width: 12)
-                            Text(line.text.isEmpty ? " " : line.text)
-                                .font(.caption.monospaced())
-                                .foregroundStyle(line.kind == .context ? .secondary : .primary)
-                                .lineLimit(2)
-                                .truncationMode(.tail)
+            if !lines.isEmpty {
+                ScrollView(.vertical) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        // 인덱스 identity — HostsDiffLine.id는 매 계산 신규 UUID라 ForEach 전면 교체 유발.
+                        ForEach(Array(lines.prefix(Self.maxRows).enumerated()), id: \.offset) { _, line in
+                            HStack(alignment: .top, spacing: 6) {
+                                Text(line.kind == .added ? "+" : line.kind == .removed ? "−" : " ")
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(line.kind == .added ? .green : line.kind == .removed ? .red : .secondary)
+                                    .frame(width: 12)
+                                Text(line.text.isEmpty ? " " : line.text)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(line.kind == .context ? .secondary : .primary)
+                                    .lineLimit(2)
+                                    .truncationMode(.tail)
+                            }
+                        }
+                        if lines.count > Self.maxRows {
+                            Text(L.str("editor.diff.more", lines.count - Self.maxRows))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
-                    if lines.count > Self.maxRows {
-                        Text(L.str("editor.diff.more", lines.count - Self.maxRows))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(8)
+                .frame(maxHeight: 240)
                 .background(.quaternary.opacity(0.5))
                 .clipShape(RoundedRectangle(cornerRadius: 6))
             }
@@ -90,7 +90,11 @@ struct MemoizedValidationView: View {
                 // 연속 변경 시 이전 계산 취소 → 입력 멈춤 후 0.3초 뒤 1회만 실행.
                 try? await Task.sleep(for: .milliseconds(300))
                 guard !Task.isCancelled else { return }
-                let result = HostsValidator().validate(entries: entries)
+                let snapshot = entries
+                // .task는 MainActor에서 돈다 — 대용량 검증이 화면 블록을 막지 않도록 백그라운드로.
+                let result = await Task.detached(priority: .userInitiated) {
+                    HostsValidator().validate(entries: snapshot)
+                }.value
                 guard !Task.isCancelled else { return }
                 issues = result
             }

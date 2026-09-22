@@ -125,6 +125,7 @@
 "network.scan.aliveChecking" = "Finding live hosts %1$d/%2$d";
 "network.scan.cache" = "cache (%1$@, %2$@)";
 "network.scan.checking" = "Checking %1$d/%2$d";
+"network.scan.clear" = "Clear";
 "network.scan.createTunnel" = "Create Tunnel";
 "network.scan.custom" = "Custom IP";
 "network.scan.found" = "%1$d ports found";
@@ -135,6 +136,7 @@
 "network.scan.lanError" = "No local network found. Check your Wi-Fi/Ethernet connection.";
 "network.scan.lastTarget.lan" = "%1$d LAN hosts";
 "network.scan.localhost" = "Local Scan";
+"network.scan.noDefaultPorts" = "Default port list is empty. Add ports in Settings or use custom/range mode.";
 "network.scan.ports.customPlaceholder" = "e.g. 80,443,3003 (empty for ports 1-10000)";
 "network.scan.ports.empty" = "Enter ports.";
 "network.scan.ports.mode.custom" = "Custom ports";
@@ -201,6 +203,7 @@
 "settings.scanPorts.applied" = "Applied %1$d ports: %2$@";
 "settings.scanPorts.default" = "Using the default %1$d ports.";
 "settings.scanPorts.defaultsTitle" = "Default port list (%1$d)";
+"settings.scanPorts.empty" = "The list is empty. Add ports below.";
 "settings.scanPorts.invalid" = "Contains out-of-range or invalid ports (1~65535).";
 "settings.scanPorts.placeholder" = "One-time override (empty for defaults below, e.g. 80,443,8000-8100)";
 "settings.scanPorts.reset" = "Reset defaults";

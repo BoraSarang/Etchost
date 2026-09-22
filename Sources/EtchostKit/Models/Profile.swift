@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 
@@ -267,10 +268,12 @@ public struct Profile: Identifiable, Codable, Equatable, Hashable, Sendable {
     public var enabledCount: Int { entries.filter(\.isEnabled).count }
 
     /// 본문 entries만의 해시 (참조 무결성용; stale 판정은 fingerprint 사용).
+    /// CryptoKit SHA256 — 실행마다 랜덤인 `Hasher`와 달리 재시작 후에도 동일해야 한다.
     public var currentHash: String {
-        var hasher = Hasher()
-        hasher.combine(entries.map { "\($0.ip) \($0.domain) \($0.comment ?? "") \($0.isEnabled)" }.joined(separator: "\n"))
-        return String(hasher.finalize(), radix: 16)
+        let payload = entries
+            .map { "\($0.ip) \($0.domain) \($0.comment ?? "") \($0.isEnabled)" }
+            .joined(separator: "\n")
+        return SHA256.hex(of: payload)
     }
 
     public mutating func markApplied(fingerprint: String) {

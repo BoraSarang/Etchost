@@ -230,6 +230,11 @@ struct SettingsView: View {
             Text(L.str("settings.scanPorts.defaultsTitle", settings.defaultScanPorts.count))
                 .font(.headline)
                 .padding(.top, 4)
+            if settings.defaultScanPorts.isEmpty {
+                Text(L.str("settings.scanPorts.empty"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 64))], spacing: 6) {
                 ForEach(settings.defaultScanPorts, id: \.self) { port in
                     HStack(spacing: 2) {

@@ -98,6 +98,91 @@ struct NetworkScannerTests {
     }
 }
 
+@Suite("TunnelManager IP 변경")
+struct TunnelManagerIPChangeTests {
+    private func tempStore() throws -> TunnelStore {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("EtchostTunnelIPTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return TunnelStore(fileURL: dir.appendingPathComponent("tunnels.json"))
+    }
+
+    @Test("이전 로컬 IP 터널만 갱신, 원격 터널은 유지")
+    @MainActor
+    func onlyMatchingIPUpdated() throws {
+        // 자동 시작 플래그가 켜져 있으면 테스트 중 실제 cloudflared가 뜨므로 강제 OFF.
+        let key = SettingsKeys.autoStartTunnelsAtLaunch
+        let prev = UserDefaults.standard.object(forKey: key)
+        UserDefaults.standard.set(false, forKey: key)
+        defer {
+            if let prev {
+                UserDefaults.standard.set(prev, forKey: key)
+            } else {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        }
+
+        let store = try tempStore()
+        let local = try store.create(label: "local", ip: "10.0.0.1", port: 3000)
+        let remote = try store.create(label: "remote", ip: "10.0.0.99", port: 3010)
+        let manager = TunnelManager(store: store, monitor: IPMonitor())
+        defer { manager.networkCleanup() }
+
+        manager.updateAllForIPChange(old: "10.0.0.1", new: "10.0.0.2")
+
+        #expect(store.get(local.id)?.ip == "10.0.0.2")
+        #expect(store.get(remote.id)?.ip == "10.0.0.99")
+    }
+
+    @Test("이전 IP를 모르면 아무 것도 갱신하지 않음")
+    @MainActor
+    func unknownOldIPSkips() throws {
+        let key = SettingsKeys.autoStartTunnelsAtLaunch
+        let prev = UserDefaults.standard.object(forKey: key)
+        UserDefaults.standard.set(false, forKey: key)
+        defer {
+            if let prev {
+                UserDefaults.standard.set(prev, forKey: key)
+            } else {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        }
+
+        let store = try tempStore()
+        let local = try store.create(label: "local", ip: "10.0.0.1", port: 3000)
+        let manager = TunnelManager(store: store, monitor: IPMonitor())
+        defer { manager.networkCleanup() }
+
+        manager.updateAllForIPChange(old: nil, new: "10.0.0.2")
+
+        #expect(store.get(local.id)?.ip == "10.0.0.1")
+    }
+}
+
+@Suite("NetworkScanner 정렬")
+struct NetworkScannerSortTests {
+    private func row(_ ip: String, _ port: Int) -> PortScanResult {
+        PortScanResult(ip: ip, port: port, service: "HTTP")
+    }
+
+    @Test("1차 IP(숫자 비교) → 2차 포트 ASC")
+    func ipFirstThenPort() {
+        let rows = [
+            row("10.233.247.205", 3010),
+            row("10.19.190.121", 3000),
+            row("10.19.190.121", 53),
+            row("10.19.9.200", 80),
+        ]
+        let sorted = NetworkScanner.sortResults(rows)
+        #expect(sorted.map { "\($0.ip):\($0.port)" } == [
+            "10.19.9.200:80",
+            "10.19.190.121:53",
+            "10.19.190.121:3000",
+            "10.233.247.205:3010",
+        ])
+    }
+}
+
 @Suite("Tunnel 모델")
 struct TunnelModelTests {
     @Test("상태 제목")

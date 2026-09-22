@@ -97,6 +97,8 @@ struct EditorFooter: View {
     let canApply: Bool
     let applyTitle: String
     let error: String?
+    /// 저장/취소/적용 성공 안내 (error와 동시 표시 가능, error 우선 색).
+    var message: String?
     let onCancel: () -> Void
     let onSave: () -> Void
     let onApply: () -> Void
@@ -113,6 +115,11 @@ struct EditorFooter: View {
                 Text(error)
                     .font(.caption)
                     .foregroundStyle(.red)
+                    .lineLimit(2)
+            } else if let message {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
 

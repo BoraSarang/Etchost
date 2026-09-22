@@ -66,6 +66,7 @@ struct FragmentEditor: View {
                 canApply: !model.isApplying && !anyInvalid && remoteURLValid && model.activeProfile != nil,
                 applyTitle: L.str("editor.applyToActive"),
                 error: model.applyError,
+                message: saveMessage,
                 onCancel: {
                     syncFromFragment()
                     model.cancelEdit(fragment.id)
@@ -87,7 +88,10 @@ struct FragmentEditor: View {
         .padding(16)
         .onAppear {
             syncFromFragment()
-            model.requestEditorSave = { saveIfDirty(); return !isDirty }
+            model.requestEditorSave = {
+                saveIfDirty()
+                return storeIsClean()
+            }
         }
         .onDisappear {
             model.requestEditorSave = nil
@@ -211,7 +215,10 @@ struct FragmentEditor: View {
 
     private func syncNow() async {
         saveRemoteIfDirty()
-        guard fragment.remote != nil, model.fragments.contains(where: { $0.id == fragment.id }) else {
+        // 저장 직후 스토어 기준으로 remote를 다시 확인 — onAppear 시점 캡처는 nil일 수 있음.
+        guard let stored = model.fragmentStore.get(fragment.id), stored.remote != nil,
+              model.fragments.contains(where: { $0.id == fragment.id })
+        else {
             syncMessage = nil
             return
         }
@@ -263,6 +270,18 @@ struct FragmentEditor: View {
         if isDirty, !anyInvalid, remoteURLValid { save() }
     }
 
+    private func storeIsClean() -> Bool {
+        guard let stored = model.fragmentStore.get(fragment.id) else { return false }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let urlClean = remoteURL.trimmingCharacters(in: .whitespacesAndNewlines) == (stored.remote?.url ?? "")
+        if isRemoteOn {
+            // 원격 모드: 이름·URL·간격만 스토어에 반영 (항목은 동기화 캐시).
+            return trimmed == stored.name && urlClean
+                && remoteInterval == (stored.remote?.interval ?? .manual)
+        }
+        return trimmed == stored.name && entries == stored.entries && urlClean
+    }
+
     private func save() {
         guard !anyInvalid, remoteURLValid else {
             saveMessage = L.str("editor.invalidSave")
@@ -274,11 +293,13 @@ struct FragmentEditor: View {
                 try model.renameFragment(fragment.id, to: trimmedName)
             }
             saveRemoteIfDirty()
-            // 원격 모드에서는 항목이 동기화 캐시이므로 직접 저장을 건너뛴다.
+            // 원격 모드에서도 이름/URL/간격 저장 후 로컬 항목 편집분은 스토어에 남긴다
+            // (원격이면 readOnly UI라 entries가 스토어와 동일 — 무해).
             if !isRemoteOn {
                 try model.updateFragmentEntries(fragment.id, entries: entries)
             }
             saveMessage = L.str("editor.saved.fragment")
+            model.editorDirty = false
         } catch {
             saveMessage = model.describe(error)
         }

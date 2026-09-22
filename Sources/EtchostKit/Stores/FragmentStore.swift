@@ -8,6 +8,7 @@ public final class FragmentStore: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.borasarang.etchost.fragmentStore", attributes: .concurrent)
     private var fragments: [UUID: Fragment] = [:]
     private let fileURL: URL
+    private var lastSaveError: Error?
 
     public init(fileURL: URL? = nil) {
         if let fileURL {
@@ -36,24 +37,47 @@ public final class FragmentStore: @unchecked Sendable {
                 guard let decoded = try? JSONDecoder().decode([Fragment].self, from: data) else {
                     throw EtchostError.ioError("fragments.json decode failed")
                 }
-                fragments = Dictionary(uniqueKeysWithValues: decoded.map { ($0.id, $0) })
+                fragments = decoded.reduce(into: [:]) { result, fragment in
+                    if result[fragment.id] != nil {
+                        NSLog("[Etchost] FragmentStore: duplicate id \(fragment.id) — keeping last")
+                    }
+                    result[fragment.id] = fragment
+                }
             } catch {
-                let corruptURL = fileURL.appendingPathExtension("corrupt-\(Int(Date().timeIntervalSince1970))")
-                try? FileManager.default.moveItem(at: fileURL, to: corruptURL)
+                quarantineCorruptFile()
                 fragments = [:]
             }
         }
     }
 
-    private func saveLocked() {
+    private func quarantineCorruptFile() {
+        let corruptURL = fileURL.appendingPathExtension("corrupt-\(Int(Date().timeIntervalSince1970))")
+        do {
+            try FileManager.default.moveItem(at: fileURL, to: corruptURL)
+            return
+        } catch {
+            do {
+                let data = try Data(contentsOf: fileURL)
+                try data.write(to: corruptURL)
+                try FileManager.default.removeItem(at: fileURL)
+            } catch {
+                NSLog("[Etchost] FragmentStore: corrupt quarantine failed for \(fileURL.path): \(error)")
+            }
+        }
+    }
+
+    private func saveLocked() throws {
         let ordered = fragments.values.sorted { $0.order < $1.order }
         do {
             let data = try JSONEncoder().encode(ordered)
             let tmpURL = fileURL.appendingPathExtension("tmp")
             try data.write(to: tmpURL, options: .atomic)
             _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: tmpURL)
+            lastSaveError = nil
         } catch {
-            // 저장 실패는 조용히 무시
+            lastSaveError = error
+            NSLog("[Etchost] FragmentStore: save failed for \(fileURL.path): \(error)")
+            throw EtchostError.ioError("fragments.json: \(error.localizedDescription)")
         }
     }
 
@@ -63,6 +87,10 @@ public final class FragmentStore: @unchecked Sendable {
 
     public func get(_ id: UUID) -> Fragment? {
         queue.sync { fragments[id] }
+    }
+
+    public var saveFailure: Error? {
+        queue.sync { lastSaveError }
     }
 
     @discardableResult
@@ -76,14 +104,19 @@ public final class FragmentStore: @unchecked Sendable {
             let nextOrder = (fragments.values.map(\.order).max() ?? -1) + 1
             let fragment = Fragment(name: trimmed, entries: entries, order: nextOrder)
             fragments[fragment.id] = fragment
-            saveLocked()
+            do {
+                try saveLocked()
+            } catch {
+                fragments.removeValue(forKey: fragment.id)
+                throw error
+            }
             return fragment
         }
     }
 
     public func update(_ fragment: Fragment) throws {
         try queue.sync(flags: .barrier) {
-            guard fragments[fragment.id] != nil else {
+            guard let previous = fragments[fragment.id] else {
                 throw EtchostError.fragmentNotFound(fragment.id)
             }
             let trimmed = fragment.name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -94,17 +127,27 @@ public final class FragmentStore: @unchecked Sendable {
             var next = fragment
             next.name = trimmed
             fragments[fragment.id] = next
-            saveLocked()
+            do {
+                try saveLocked()
+            } catch {
+                fragments[fragment.id] = previous
+                throw error
+            }
         }
     }
 
     public func delete(_ id: UUID) throws {
         try queue.sync(flags: .barrier) {
-            guard fragments[id] != nil else {
+            guard let fragment = fragments[id] else {
                 throw EtchostError.fragmentNotFound(id)
             }
             fragments.removeValue(forKey: id)
-            saveLocked()
+            do {
+                try saveLocked()
+            } catch {
+                fragments[id] = fragment
+                throw error
+            }
         }
     }
 
@@ -114,9 +157,15 @@ public final class FragmentStore: @unchecked Sendable {
             guard var fragment = fragments[id] else {
                 throw EtchostError.fragmentNotFound(id)
             }
+            let previous = fragment
             fragment.applySync(entries: entries, at: date)
             fragments[id] = fragment
-            saveLocked()
+            do {
+                try saveLocked()
+            } catch {
+                fragments[id] = previous
+                throw error
+            }
         }
     }
 
@@ -124,14 +173,20 @@ public final class FragmentStore: @unchecked Sendable {
     public func recordSyncError(_ id: UUID, message: String) {
         queue.sync(flags: .barrier) {
             guard var fragment = fragments[id] else { return }
+            let previous = fragment
             fragment.recordSyncError(message)
             fragments[id] = fragment
-            saveLocked()
+            do {
+                try saveLocked()
+            } catch {
+                fragments[id] = previous
+            }
         }
     }
 
     public func reorder(_ ids: [UUID]) {
         queue.sync(flags: .barrier) {
+            let snapshot = fragments
             for (index, id) in ids.enumerated() {
                 if var fragment = fragments[id] {
                     fragment.order = index
@@ -144,7 +199,11 @@ public final class FragmentStore: @unchecked Sendable {
                 next.order = ids.count + offset
                 fragments[fragment.id] = next
             }
-            saveLocked()
+            do {
+                try saveLocked()
+            } catch {
+                fragments = snapshot
+            }
         }
     }
 }

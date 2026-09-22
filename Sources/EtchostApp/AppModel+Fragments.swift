@@ -4,11 +4,13 @@ import Foundation
 // MARK: - Fragment CRUD
 
 extension AppModel {
-    public func createFragment(name: String) throws {
+    @discardableResult
+    public func createFragment(name: String) throws -> Fragment {
         let fragment = try fragmentStore.create(name: name)
         refresh()
         sidebarSection = .fragments
         selectedFragmentID = fragment.id
+        return fragment
     }
 
     public func renameFragment(_ id: UUID, to name: String) throws {

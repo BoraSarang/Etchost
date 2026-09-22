@@ -7,6 +7,7 @@ public final class TunnelStore: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.borasarang.etchost.tunnelStore", attributes: .concurrent)
     private var tunnels: [UUID: Tunnel] = [:]
     private let fileURL: URL
+    private var lastSaveError: Error?
 
     public init(fileURL: URL? = nil) {
         if let fileURL {
@@ -37,7 +38,7 @@ public final class TunnelStore: @unchecked Sendable {
                     throw EtchostError.ioError("tunnels.json decode failed")
                 }
                 var migrated = false
-                tunnels = Dictionary(uniqueKeysWithValues: decoded.map { item in
+                tunnels = decoded.reduce(into: [:]) { result, item in
                     var next = item
                     let fixed = Self.migrateLabel(next.label)
                     if fixed != next.label {
@@ -45,13 +46,31 @@ public final class TunnelStore: @unchecked Sendable {
                         next.updatedAt = Date()
                         migrated = true
                     }
-                    return (next.id, next)
-                })
-                if migrated { saveLocked() }
+                    if result[next.id] != nil {
+                        NSLog("[Etchost] TunnelStore: duplicate id \(next.id) — keeping last")
+                    }
+                    result[next.id] = next
+                }
+                if migrated { try? saveLocked() }
             } catch {
-                let corruptURL = fileURL.appendingPathExtension("corrupt-\(Int(Date().timeIntervalSince1970))")
-                try? FileManager.default.moveItem(at: fileURL, to: corruptURL)
+                quarantineCorruptFile()
                 tunnels = [:]
+            }
+        }
+    }
+
+    private func quarantineCorruptFile() {
+        let corruptURL = fileURL.appendingPathExtension("corrupt-\(Int(Date().timeIntervalSince1970))")
+        do {
+            try FileManager.default.moveItem(at: fileURL, to: corruptURL)
+            return
+        } catch {
+            do {
+                let data = try Data(contentsOf: fileURL)
+                try data.write(to: corruptURL)
+                try FileManager.default.removeItem(at: fileURL)
+            } catch {
+                NSLog("[Etchost] TunnelStore: corrupt quarantine failed for \(fileURL.path): \(error)")
             }
         }
     }
@@ -71,15 +90,18 @@ public final class TunnelStore: @unchecked Sendable {
         return fixed
     }
 
-    private func saveLocked() {
+    private func saveLocked() throws {
         let ordered = tunnels.values.sorted { $0.order < $1.order }
         do {
             let data = try JSONEncoder().encode(ordered)
             let tmpURL = fileURL.appendingPathExtension("tmp")
             try data.write(to: tmpURL, options: .atomic)
             _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: tmpURL)
+            lastSaveError = nil
         } catch {
-            // 저장 실패는 조용히 무시
+            lastSaveError = error
+            NSLog("[Etchost] TunnelStore: save failed for \(fileURL.path): \(error)")
+            throw EtchostError.ioError("tunnels.json: \(error.localizedDescription)")
         }
     }
 
@@ -91,6 +113,10 @@ public final class TunnelStore: @unchecked Sendable {
 
     public func get(_ id: UUID) -> Tunnel? {
         queue.sync { tunnels[id] }
+    }
+
+    public var saveFailure: Error? {
+        queue.sync { lastSaveError }
     }
 
     // MARK: - Writes
@@ -106,30 +132,51 @@ public final class TunnelStore: @unchecked Sendable {
             let nextOrder = (tunnels.values.map(\.order).max() ?? -1) + 1
             let tunnel = Tunnel(label: safeLabel, ip: ip, port: port, order: nextOrder)
             tunnels[tunnel.id] = tunnel
-            saveLocked()
+            do {
+                try saveLocked()
+            } catch {
+                tunnels.removeValue(forKey: tunnel.id)
+                throw error
+            }
             return tunnel
         }
     }
 
     public func update(_ tunnel: Tunnel) throws {
         try queue.sync(flags: .barrier) {
-            guard tunnels[tunnel.id] != nil else {
+            guard let previous = tunnels[tunnel.id] else {
                 throw EtchostError.tunnelNotFound(tunnel.id)
             }
+            let trimmed = tunnel.label.trimmingCharacters(in: .whitespacesAndNewlines)
+            let safeLabel = trimmed.isEmpty ? "\(tunnel.ip):\(tunnel.port)" : trimmed
+            guard !tunnels.values.contains(where: { $0.label == safeLabel && $0.id != tunnel.id }) else {
+                throw EtchostError.duplicateTunnelLabel(safeLabel)
+            }
             var next = tunnel
+            next.label = safeLabel
             next.updatedAt = Date()
             tunnels[tunnel.id] = next
-            saveLocked()
+            do {
+                try saveLocked()
+            } catch {
+                tunnels[tunnel.id] = previous
+                throw error
+            }
         }
     }
 
     public func delete(_ id: UUID) throws {
         try queue.sync(flags: .barrier) {
-            guard tunnels[id] != nil else {
+            guard let tunnel = tunnels[id] else {
                 throw EtchostError.tunnelNotFound(id)
             }
             tunnels.removeValue(forKey: id)
-            saveLocked()
+            do {
+                try saveLocked()
+            } catch {
+                tunnels[id] = tunnel
+                throw error
+            }
         }
     }
 }
