@@ -41,7 +41,7 @@ Sources/EtchostApp      macOS app (SwiftUI, menu-bar popover + main window)
 Sources/EtchostKit      Framework + Swift Package (models, stores, services)
 Resources/i18n          ko.json / en.json — single source of truth for UI strings
 Scripts/sync_localization.py — generates Localizable.strings from the JSONs
-Tests/EtchostKitTests   Swift Testing suites (50 tests / 16 suites)
+Tests/EtchostKitTests   Swift Testing suites (88 tests / 24 suites)
 ```
 
 | Bundle ID | `com.borasarang.etchost` |
